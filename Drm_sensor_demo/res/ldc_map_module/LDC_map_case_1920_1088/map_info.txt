@@ -1,0 +1,7 @@
+in_res_w:1920
+in_res_h:1088
+out_res_w:1920
+out_res_h:1088
+map_x_grid:61
+map_y_grid:35
+grid_size:32
