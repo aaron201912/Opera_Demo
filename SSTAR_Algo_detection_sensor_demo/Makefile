@@ -1,5 +1,5 @@
 #TOOLCHAIN_VERSION=10.2.1
-TOOLCHAIN_VERSION=6.4.0
+TOOLCHAIN_VERSION ?=6.4.0
 ENABLE_LDC=0
 
 ifeq ($(TOOLCHAIN_VERSION),6.4.0)
@@ -14,7 +14,7 @@ CC  = $(CROSS_COMPILE)gcc
 CPP = $(CROSS_COMPILE)g++
 AR  = $(CROSS_COMPILE)ar
 
-ALKAID_PATH ?= ..
+ALKAID_PATH ?= /users/peng.xiong/Opera_V2.0.0
 INTERFACE_CUS3A = enable
 dirs := ./ ./common
 dirs += ./drm ./sensor ./rgn ./algo

@@ -7,11 +7,11 @@ endif
 ifeq ($(TOOLCHAIN_VERSION),10.2.1)
 CROSS_COMPILE ?=aarch64-linux-gnu-
 endif
-PROJ_ROOT=/home/peng.xiong/Alkaid/project
+PROJ_ROOT=/users/peng.xiong/Opera_V2.0.0/project
 
 #test
 TEST_OBJECT:= ./dla_show_img_info.cpp ./show_ipu_log.cpp
-INCLUDE_TEST += -I $(PROJ_ROOT)/release/include -I ./
+INCLUDE_TEST += -I $(PROJ_ROOT)/release/include  -I $(PROJ_ROOT)/release/include/ipu/opera -I ./
 #INCLUDE_TEST += -I $(PROJ_ROOT)/../kernel/drivers/sstar/include   
 
 #dynamic

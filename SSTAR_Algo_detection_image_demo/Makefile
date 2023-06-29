@@ -7,13 +7,14 @@ endif
 ifeq ($(TOOLCHAIN_VERSION),10.2.1)
 export CROSS_COMPILE=/tools/toolchain/gcc-10.2.1-20210303-sigmastar-glibc-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-
 endif
-PROJ_ROOT=/users/peng.xiong/Opera_V001
+PROJ_ROOT=/users/peng.xiong/Opera_V2.0.0/project
 
 #test
 TEST_OBJECT:= ./test_draw.cpp
 INCLUDE_TEST += -I ./inc
 INCLUDE_TEST += -I ./inc/opencv4
 INCLUDE_TEST += -I $(PROJ_ROOT)/release/include
+INCLUDE_TEST += -I $(PROJ_ROOT)/release/include/ipu/opera
 INCLUDE_TEST += -I $(PROJ_ROOT)/../kernel/drivers/sstar/include
 
 ifeq ($(TOOLCHAIN_VERSION),6.4.0)
