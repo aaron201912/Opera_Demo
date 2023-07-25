@@ -20,10 +20,11 @@ int adc_data_fd = -1;
 
 int sar_adc_init(void)
 {
-    //启动PWM_ADC
+    system("echo 1 > /sys/devices/virtual/mstar/pwmout/adc_chan_cover");
+	//启动PWM_ADC
     system("echo 1 > /sys/devices/virtual/mstar/pwmout/adc_en");
-    //设置通道数为24且启用所有SAR_ADC系列通道
-    system("echo 24 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 > /sys/devices/virtual/mstar/pwmout/adc_regu_seq");
+    //设置通道数为23且启用所有SAR_ADC系列通道
+    system("echo 23 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 > /sys/devices/virtual/mstar/pwmout/adc_regu_seq");
     //自由触发模式且每次触发采集所有通道
     system("echo 14 1 > /sys/devices/virtual/mstar/pwmout/adc_regu_tri");
     //周期性采集
