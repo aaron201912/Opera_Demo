@@ -142,6 +142,11 @@ void frame_queue_next(frame_queue_t *f,frame_t* pFrame)
     //printf("frame_queue_next end f=%llx rindex=%d \n",f,f->rindex);
 }
 
+void frame_queue_peek_end(frame_queue_t *f)
+{
+    pthread_mutex_unlock(&f->queue[f->rindex].mutex);
+}
+
 void frame_queue_flush(frame_queue_t *f)
 {
     //printf("queue valid size : %d, rindex : %d\n", f->size, f->rindex);

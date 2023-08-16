@@ -120,6 +120,8 @@ void *sstar_drmfb_get_buffer(int buf_i);
 /**************************************************
 * Commit drm crtc property
 * @param            \b IN: buffer object
+* @param            \b IN: drm plane id
+* @param            \b IN: drm property ids
 * @return           \b OUT: 0:   success
                            -1:   fail
 **************************************************/

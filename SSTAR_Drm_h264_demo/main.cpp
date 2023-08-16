@@ -1,4 +1,3 @@
-//#include <unistd.h>
 #include <getopt.h>
 #include "common/common.h"
 #include "sstar_drm.h"
@@ -53,13 +52,14 @@ int parse_args(int argc, char **argv)
 	memset(&connector_name, 0, 20);
     struct option long_options[] = {
             {"vpath", required_argument, NULL, 'V'},
-            {"apath", required_argument, NULL, 'a'},
-            {"hdmi", no_argument, NULL, 'M'},
+            {"gop", required_argument, NULL, 'g'},
+            {"yuv", required_argument, NULL, 'y'},
+			{"connect", required_argument, NULL, 'c'},
             {"help", no_argument, NULL, 'h'},
             {0, 0, 0, 0}
     };
 
-    while ((s32Opt = getopt_long(argc, argv, "X:Y:W:H:Y:R:N:P:s:c:v:h:g:y:",long_options, &option_index))!= -1 )
+    while ((s32Opt = getopt_long(argc, argv, "V:g:y:c:h:",long_options, &option_index))!= -1 )
     {
         switch(s32Opt)
         {
@@ -98,7 +98,12 @@ int parse_args(int argc, char **argv)
                     _g_buf_obj[0].connector_type = DRM_MODE_CONNECTOR_DPI;
 				} else if (!strcmp(connector_name, "mipi") || !strcmp(connector_name, "Mipi") || !strcmp(connector_name, "MIPI")) {
 				    _g_buf_obj[0].connector_type = DRM_MODE_CONNECTOR_DSI;
-				} else {
+				} else if (!strcmp(connector_name, "lvds") || !strcmp(connector_name, "Lvds") || !strcmp(connector_name, "LVDS")) {
+                    _g_buf_obj[0].connector_type = DRM_MODE_CONNECTOR_LVDS; 
+                } else if (!strcmp(connector_name, "hdmi") || !strcmp(connector_name, "Hdmi") || !strcmp(connector_name, "HDMI")) {
+				    _g_buf_obj[0].connector_type = DRM_MODE_CONNECTOR_HDMIA;
+				}
+                else {
 				   display_help();
 				   return -1;
 				}
@@ -167,11 +172,12 @@ void  int_buf_obj(int i)
         _g_buf_obj[i].vdec_info.v_src_width = ALIGN_BACK(_g_buf_obj[i].width, ALIGN_NUM);
         _g_buf_obj[i].vdec_info.v_src_height = ALIGN_BACK(_g_buf_obj[i].height, ALIGN_NUM);
     }
-    else if(_g_buf_obj[i].connector_type == DRM_MODE_CONNECTOR_DSI)
+    else if(_g_buf_obj[i].connector_type == DRM_MODE_CONNECTOR_DSI || _g_buf_obj[i].connector_type == DRM_MODE_CONNECTOR_LVDS 
+            || _g_buf_obj[i].connector_type == DRM_MODE_CONNECTOR_HDMIA)
     {
         _g_buf_obj[i].vdec_info.v_src_width = ALIGN_BACK(720, ALIGN_NUM);
         _g_buf_obj[i].vdec_info.v_src_height = ALIGN_BACK(1280/2, ALIGN_NUM);
-    } 
+    }
     _g_buf_obj[i].vdec_info.v_src_stride = _g_buf_obj[i].vdec_info.v_src_width;
     _g_buf_obj[i].vdec_info.v_src_size = (_g_buf_obj[i].vdec_info.v_src_height * _g_buf_obj[i].vdec_info.v_src_stride * 3)/2;
 
@@ -182,7 +188,8 @@ void  int_buf_obj(int i)
         _g_buf_obj[i].vdec_info.v_out_width = ALIGN_BACK(_g_buf_obj[i].width, ALIGN_NUM);
         _g_buf_obj[i].vdec_info.v_out_height = ALIGN_BACK(_g_buf_obj[i].height, ALIGN_NUM);
     }
-    else if(_g_buf_obj[i].connector_type == DRM_MODE_CONNECTOR_DSI)
+    else if(_g_buf_obj[i].connector_type == DRM_MODE_CONNECTOR_DSI || _g_buf_obj[i].connector_type == DRM_MODE_CONNECTOR_LVDS 
+            || _g_buf_obj[i].connector_type == DRM_MODE_CONNECTOR_HDMIA)
     {
         _g_buf_obj[i].vdec_info.v_out_width = ALIGN_BACK(720, ALIGN_NUM);
         _g_buf_obj[i].vdec_info.v_out_height = ALIGN_BACK(1280/2, ALIGN_NUM);
@@ -190,6 +197,7 @@ void  int_buf_obj(int i)
     _g_buf_obj[i].vdec_info.v_out_stride = _g_buf_obj[i].vdec_info.v_out_width;
     _g_buf_obj[i].vdec_info.v_out_size = (_g_buf_obj[i].vdec_info.v_out_height * _g_buf_obj[i].vdec_info.v_out_stride * 3)/2;
     _g_buf_obj[i].vdec_info.v_bframe = 0;
+	_g_buf_obj[i].vdec_info.pixelformat = E_MI_VDEC_CODEC_TYPE_H264;
     sem_init(&_g_buf_obj[i].sem_avail, 0, MAX_NUM_OF_DMABUFF);
     _g_buf_obj[i].used = 1;
 	printf("buf->width=%d buf->height=%d v_src_width=%d v_src_height=%d v_out_width=%d v_out_height=%d\n",_g_buf_obj[i].width,
@@ -224,7 +232,6 @@ int main(int argc, char **argv)
     {
         return 0;
     }
-    getchar();
     MI_SYS_Init(0);
     for(i=0; i < BUF_NUM; i++)
     {

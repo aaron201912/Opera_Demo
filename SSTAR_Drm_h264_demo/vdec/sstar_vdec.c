@@ -521,23 +521,23 @@ int sstar_vdec_init(buffer_object_t *buf_obj)
 {
     MI_VDEC_ChnAttr_t stChnAttr;
     MI_VDEC_CHN VdecChn     = 0;
-    //MI_VDEC_InitParam_t stVdecInitParam;
+    MI_VDEC_InitParam_t stVdecInitParam;
     MI_VDEC_OutputPortAttr_t stOutputPortAttr;
     MI_U32 u32DevIndex = 0;
     vdec_info_t vdec_info = buf_obj->vdec_info;
     //MI_SYS_Init(0);
 
-    //memset(&stVdecInitParam, 0x0, sizeof(MI_VDEC_InitParam_t));
-    //stVdecInitParam.u16MaxWidth = (MI_U16)VDEC_MAX_WIDTH;
-    //stVdecInitParam.u16MaxHeight = (MI_U16)VDEC_MAX_HEIGHT;
+    memset(&stVdecInitParam, 0x0, sizeof(MI_VDEC_InitParam_t));
+    stVdecInitParam.u16MaxWidth = ALIGN_UP(VDEC_MAX_WIDTH, ALIGN_NUM);
+    stVdecInitParam.u16MaxHeight = ALIGN_UP(VDEC_MAX_HEIGHT, ALIGN_NUM);
 
-    //MI_VDEC_CreateDev(u32DevIndex, &stVdecInitParam);
+    MI_VDEC_CreateDev(u32DevIndex, &stVdecInitParam);
     MI_VDEC_SetOutputPortLayoutMode(u32DevIndex, E_MI_VDEC_OUTBUF_LAYOUT_AUTO);
 
     memset(&stChnAttr, 0x0, sizeof(MI_VDEC_ChnAttr_t));
-    stChnAttr.eCodecType                     = E_MI_VDEC_CODEC_TYPE_H264;
-    stChnAttr.u32PicWidth                    = 1920;//ALIGN_BACK(vdec_info->v_src_width , 32);
-    stChnAttr.u32PicHeight                   = 1080;//ALIGN_BACK(vdec_info->v_src_height, 32);
+    stChnAttr.eCodecType                     = vdec_info.pixelformat;
+    stChnAttr.u32PicWidth                    = ALIGN_BACK(vdec_info.v_out_width, ALIGN_NUM);
+    stChnAttr.u32PicHeight                   = ALIGN_BACK(vdec_info.v_out_height, ALIGN_NUM);
     stChnAttr.eVideoMode                     = E_MI_VDEC_VIDEO_MODE_FRAME;
     stChnAttr.u32BufSize                     = 2 * 1920 * 1080;
     // if(stChnAttr.u32PicWidth * stChnAttr.u32PicHeight <= (1920 * 1080)){
@@ -573,9 +573,9 @@ int sstar_vdec_init(buffer_object_t *buf_obj)
     {
         strcpy(file_path,buf_obj->video_file);
     }
-
+#ifndef UVC_HOST_ENABLE
     pthread_create(&_g_tid_video, NULL, sstar_video_thread, (void *)buf_obj);
-
+#endif
     return 0;
 }
 
@@ -583,11 +583,13 @@ int sstar_vdec_deinit(buffer_object_t *buf_obj)
 {
     MI_VDEC_CHN VdecChn     = 0;
     MI_U32 u32DevIndex = 0;
+#ifndef UVC_HOST_ENABLE
     buf_obj->bExit_second = 1;
     if(_g_tid_video)
     {
         pthread_join(_g_tid_video, NULL);
     }
+#endif
     ExecFunc(MI_VDEC_StopChn(u32DevIndex, VdecChn), MI_SUCCESS);
     ExecFunc(MI_VDEC_DestroyChn(u32DevIndex, VdecChn), MI_SUCCESS);
     MI_VDEC_DestroyDev(u32DevIndex);

@@ -1,7 +1,7 @@
 Demo说明：
-	本Demo主要针对的是DRM架构的使用介绍
+	本Demo主要针对的是DRM-VDEC架构的使用介绍
 
-	需要SDK支持DRM && Dma_heap
+	需要SDK支持DRM && VDEC
 
 一、编译说明：
 	a.修改makefile中的编译链为系统对应编译链
@@ -23,8 +23,7 @@ Demo说明：
 --vpath  : 使能vdec,指定video播放文件路径
 -g : 选填,指定显示GOP图标(默认值为0)
 -y : 选填,指定显示NV12图像(默认值为0)
--c : 必填,指定输出panel类型,ttl / mipi
-
+-c : 必填,指定输出panel类型,ttl/mipi/lvds/hdmi, 需要提前配置好屏参否则会找不到屏参报错Segmentation fault
 
 eg:
 	./Drm_player --vpath 720P25.h264 -g 1 -y 1 -c ttl
