@@ -64,8 +64,14 @@ ifeq ($(ENABLE_LDC),1)
 C_FLAGS += -DENABLE_LDC
 CPP_FLAGS += -DENABLE_LDC
 LIB_NAME += -lgles_ldc -lmali -lEGL -lGLESv1_CM -lGLESv2
-INCLUDES  += -I$(ALKAID_PATH)/sdk/osdk/gpu/opengles/ldc
-LIB_PATH   +=-L$(ALKAID_PATH)/sdk/osdk/gpu/opengles/ldc -L$(ALKAID_PATH)/project/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/3rd_party_libs/dynamic
+INCLUDES  += -I./ldc
+ifeq ($(TOOLCHAIN_VERSION),10.2.1)
+LIB_PATH  := -L./lib/lib_64/ldclib
+endif
+ifeq ($(TOOLCHAIN_VERSION),6.4.0)
+LIB_PATH  := -L./lib/lib_32/ldclib
+endif
+LIB_PATH += -L$(ALKAID_PATH)/project/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/3rd_party_libs/dynamic
 endif
 ifeq ($(INTERFACE_CUS3A), enable)
 LIB_NAME += -lcus3a -lispalgo
