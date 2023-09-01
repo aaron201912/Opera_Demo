@@ -1,40 +1,40 @@
 ﻿Demo说明：
-	
-	1、sensor->vif->isp->scl->ttl
-                                                      ->ipu
-                                                      ->rtsp
-模型说明：
-	以 syfd5.360302_fixed.sim_sgsimg.img 为例
-	sy：算法代号
-	fd：face detection，标示人脸检测，其他情况：
-		pcn（表示person、bicycle、car、motorcycle、bus、truck的检测）
-		pcd（表示person，cat，dog的检测）
-		pf（表示person，face的检测）
-		pc（表示person、car、bus、truck的检测）
-	5：算法代号，高内存版本，其他情况：
-		2（低内存版）
-	36: 模型输入 352*640，其他情况：
-		48（表示480*800）
-	0302：算法代号
+	本Demo主要针对的是DRM架构的使用介绍
+
+	需要SDK支持DRM && Dma_heap
 
 一、编译说明：
-    a.修改makefile中的编译链为系统对应编译链，修改PROJ_ROOT路径
+	a.修改makefile中的编译链为系统对应编译链
 	
-    b. make clean; make 
+    b.如果将demo放到跟project同级目录   （默认方式）
+    --> make clean; make
 
-二、code修改说明：
-    根据不同的模型和输入格式修改g_detection_info，包括ipu firmware路径、模型路径、分辨率等。
-	
-三、生成bin文件：
-    --> out/Sensor_rtsp  sensor图像实时送给算法，在图像中用osd框出人脸/人形并实时显示在屏幕上
+    c.demo放置到任意路径，只需在make的时候指定ALKAID_PATH到工程的目录（需要链接SDK头文件）
+    --> declare -x ALKAID_PATH=~/sdk/source_code/${mysdkrootpath}
+    --> make clean; make TOOLCHAIN_VERSION=6.4.0 OR make clean; make TOOLCHAIN_VERSION=10.2.1
 
-四、Demo运行参数说明
+二、生成bin文件：
+    --> out/Drm_sensor_demo
+
+三、Demo运行参数说明
 
 ************************* usage *************************
- ./Sensor_rtsp -h
--p : select sensor pad
--c : select panel type: ttl / mipi
--b : select iq file
-eg:./Sensor_rtsp  -p 0 -c ttl 
+
+-s: [0/1/2]选择sensorpadid,SSU9383只支持选0/2, SSU9386只支持选0/1（默认是0）
+-i：指定需要load得iqxx.bin,只作用于第一路pipline
+-I：指定需要load得iqxx.bin,只作用于第二路pipline
+-r：选择是否需要旋转（1/2/3分别对应是90/180/270度旋转）,只作用于第一路pipline
+-m：指定人形检测的算法模型路径,只作用于第一路pipline
+-n：[1/2]选择单路播放还是pip双sensor（默认单路）
+-a：[0/1]选择是否打开人形检查,只作用于第一路pipline(默认关闭)
+-h: [0/1]是否开启HDR功能，只作用于第一路pipline
+-c: 指定需要显示的屏接口类型，需要提前配置好屏参否则会Segmentation fault
+
+eg:
+	单路sensor，从sensor_pad 0出流, 支持人型检测：
+	./Drm_sensor_demo -s 0 -c ttl -i /customer/xxx.bin -m/module_path -a 1 -r 2
+	
+	双Sensor PIP,主路支持人型检测
+    ./Drm_sensor_demo -n 2 -c ttl -i /customer/xxx.bin -I /customer/xxx.bin -m/module_path -a 1 -r 2
 
 

@@ -1,27 +1,34 @@
-CROSS_COMPILE ?=arm-linux-gnueabihf-
-CC  = arm-linux-gnueabihf-gcc
-CPP = arm-linux-gnueabihf-g++
+#TOOLCHAIN_VERSION=10.2.1
+TOOLCHAIN_VERSION ?=6.4.0
+CHIP ?=SSD2386
+ENABLE_LDC=0
+ENABLE_RTSP ?=0
+ENABLE_DRM ?=0
+
+CC  = $(CROSS_COMPILE)gcc
+CPP = $(CROSS_COMPILE)g++
 AR  = $(CROSS_COMPILE)ar
 
-ALKAID_PATH ?= /home/zekun.zhang/cust/P5_alkaid/dev_p5_bringup_new
-dirs := ./src
-dirs += ./internal/rgn
-
+ALKAID_PATH ?= ..
+INTERFACE_CUS3A = enable
+dirs := ./ ./common
+dirs += ./sensor ./rgn ./algo ./rtsp ./scl ./venc
 OUTPUT_DIR := ./out
 $(info mysdk=$(ALKAID_PATH))
-COM_FLAGS = -Wall -g -fPIC 
+COM_FLAGS = -Wall -g -fPIC
 #COM_FLAGS += -mfloat-abi=hard
 C_FLAGS  = $(COM_FLAGS) -std=gnu11
 CPP_FLAGS  = $(COM_FLAGS) -std=gnu++11
 
-INCLUDES  := -I./include -I$(ALKAID_PATH)/project/release/include   -I./include/libdrm  -I./include/algo -I./internal/rgn
-INCLUDES  += -I./include/live555/UsageEnvironment/include
-INCLUDES  += -I./include/live555/groupsock/include
-INCLUDES  += -I./include/live555/liveMedia/include
-INCLUDES  += -I./include/live555/BasicUsageEnvironment/include
-INCLUDES  += -I./include/live555/mediaServer/include
+INCLUDES  := -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include -I$(ALKAID_PATH)/project/release/include/isp -I$(ALKAID_PATH)/project/release/include/isp/opera -I./include -I$(ALKAID_PATH)/project/release/include/ipu/opera 
+INCLUDES  += -I./common -I./sensor -I./rgn -I./algo -I./rtsp -I./scl -I./venc
+INCLUDES  += -I./rtsp/live555/UsageEnvironment/include
+INCLUDES  += -I./rtsp/live555/groupsock/include
+INCLUDES  += -I./rtsp/live555/liveMedia/include
+INCLUDES  += -I./rtsp/live555/BasicUsageEnvironment/include
+INCLUDES  += -I./rtsp/live555/mediaServer/include
 
-TARGET_NAME  := Sensor_rtsp
+TARGET_NAME  := Sensor_rtsp_demo
 
 CPP_SRCS := $(foreach dir,$(dirs),$(wildcard $(dir)/*.cpp))
 CPP_OBJS := $(foreach n,$(CPP_SRCS),$(addsuffix .cpp.o,$(basename ${n})))
@@ -29,11 +36,50 @@ CPP_OBJS := $(foreach n,$(CPP_SRCS),$(addsuffix .cpp.o,$(basename ${n})))
 C_SRCS := $(foreach dir,$(dirs),$(wildcard $(dir)/*.c))
 C_OBJS := $(foreach n,$(C_SRCS),$(addsuffix .c.o,$(basename ${n})))
 
-LIB_PATH  := -L./lib -L./lib/algo -L$(ALKAID_PATH)/project/release/chip/p5/dispcam/common/glibc/6.4.0/mi_libs/dynamic  
-LIB_PATH  += -L$(ALKAID_PATH)/project/release/chip/p5/sigma_common_libs/glibc/6.4.0/dynamic/
+ifeq ($(TOOLCHAIN_VERSION),10.2.1)
+LIB_PATH  := -L./lib/lib_64 -L./lib/lib_64/algolib
+endif
 
-LIB_NAME := -lm  -llive555 -ldrm -lcus3a -lispalgo -lmi_iqserver -lmi_venc  -lmi_vdec -lmi_vif  -lmi_scl  -lmi_sensor  -lmi_isp  -lmi_ipu -lmi_rgn  -lmi_sys  -lmi_common -lsstar_algo -lsstar_algo_detection -ldl -lcam_os_wrapper -lcam_fs_wrapper -lpthread
+ifeq ($(TOOLCHAIN_VERSION),6.4.0)
+LIB_PATH  := -L./lib/lib_32 -L./lib/lib_32/algolib
+endif
 
+ifeq ($(TOOLCHAIN_VERSION),10.2.1)
+CROSS_COMPILE ?=aarch64-linux-gnu-
+endif
+
+ifeq ($(TOOLCHAIN_VERSION),6.4.0)
+CROSS_COMPILE ?=arm-linux-gnueabihf-
+endif
+
+ifeq ($(CHIP),SSD2386)
+C_FLAGS += -DCHIP_IS_SSD2386
+CPP_FLAGS += -DCHIP_IS_SSD2386
+else ifeq  ($(CHIP),SSU9383)
+C_FLAGS += -DCHIP_IS_SSU9383
+CPP_FLAGS += -DCHIP_IS_SSU9383
+else ifeq  ($(CHIP),SSD2381)
+C_FLAGS += -DCHIP_IS_SSD2381
+CPP_FLAGS += -DCHIP_IS_SSD2381
+endif
+
+ifeq ($(ENABLE_RTSP),1)
+C_FLAGS += -DRTSP_ENABLE
+CPP_FLAGS += -DRTSP_ENABLE
+endif
+
+ifeq ($(ENABLE_DRM),1)
+C_FLAGS += -DDRM_ENABLE
+CPP_FLAGS += -DDRM_ENABLE
+endif
+
+LIB_PATH  += -L$(ALKAID_PATH)/project/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/mi_libs/dynamic
+LIB_PATH  += -L$(ALKAID_PATH)/project/release/chip/p5/sigma_common_libs/glibc/$(TOOLCHAIN_VERSION)/dynamic/
+LIB_NAME := -lm -llive555 -lmi_venc -lmi_isp -lmi_vif -lmi_sensor -lmi_iqserver -lmi_scl -lmi_sys -lmi_rgn -lmi_ipu -lmi_common -lsstaralgo_det -ldl -lcam_os_wrapper  -lcam_fs_wrapper -lpthread
+#-lmi_hdmirx
+ifeq ($(INTERFACE_CUS3A), enable)
+LIB_NAME += -lcus3a -lispalgo
+endif
 
 .PHONY: all prepare clean
 
@@ -61,12 +107,12 @@ finish: $(TARGET_NAME)
 
 $(TARGET_NAME): $(CPP_OBJS) $(CPP_SRCS) $(C_OBJS) $(C_SRCS)
 	@echo "generate $@"
-	@$(CPP) -o $@ $(C_OBJS) $(CPP_OBJS) $(LIB_PATH) $(LIB_NAME) 
+	@$(CPP) -o $@ $(C_OBJS) $(CPP_OBJS) $(LIB_PATH) $(LIB_NAME) -lm
 
 %.c.o : %.c
 	@echo "compile $@"
-	@$(CC) -DENABLE_HDMI=$(ENABLE_HDMI)  $(C_FLAGS) $(INCLUDES) $(DEFINES) -c $< -o $@
+	@$(CC) -DENABLE_HDMI=$(ENABLE_HDMI)  $(C_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@
 
 %.cpp.o : %.cpp
 	@echo "compile $@"
-	@$(CPP) -DENABLE_HDMI=$(ENABLE_HDMI)  $(CPP_FLAGS) $(INCLUDES) $(DEFINES) -c $< -o $@
+	@$(CPP) -DENABLE_HDMI=$(ENABLE_HDMI)  $(CPP_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@
