@@ -7,9 +7,20 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <stdint.h>
-
+#include <pthread.h>
 #include "sstar_rpmsg.h"
 #include "rpmsg_dualos_common.h"
+#define RPMSG_COUNT 3
+
+struct rpmsg_info
+{
+    int eptFd;
+    int channel;
+    int src;
+    int dst;
+    pthread_t recv_thread;
+    int exit;
+};
 
 unsigned long get_current_tick(void)
 {
@@ -368,30 +379,78 @@ void parse_message(int EndPoint, const char *data)
     }
 }
 
+void* rpmsg_recv(void* param)
+{
+    //select Mcu message
+    int s32Ret = 0;
+    int ret = 0;
+    fd_set read_fds;
+    char data[256];
+    struct timeval TimeoutVal;
+    struct rpmsg_info *info = (struct rpmsg_info *)param;
+    TimeoutVal.tv_sec = 2;
+    TimeoutVal.tv_usec = 0;
+    while(info->exit)
+    {      
+        FD_ZERO(&read_fds);
+        FD_SET(info->eptFd, &read_fds);
+        //printf("select rpmsg dev!\n");
+        pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+        s32Ret = select(info->eptFd + 1, &read_fds, NULL, NULL, &TimeoutVal);
+        if(s32Ret < 0)
+        {
+            printf("rpmsg select failed\n");
+            usleep(10 * 1000);
+            continue;
+        }
+        else if(s32Ret == 0)
+        {
+            usleep(10 * 1000);
+            continue;
+        }
+        else
+        {
+            if(FD_ISSET(info->eptFd, &read_fds)){
+                printf("Mcu reday send message\n");
+                memset(data, 0, sizeof(data));
+                ret = read(info->eptFd, data, sizeof(data));
+                if (ret > 0)
+                {
+                    printf("Linux [ept src:%d;rpmsg channel:%d] read:%s\n", info->src, info->channel, data);
+                    if(info->dst == 2)
+                        parse_message(info->eptFd, data);
+                    else
+                    {
+                        memset(data, 0, sizeof(data));
+                        snprintf(data, sizeof(data), "rpmsg [channel:%d;Linux ept:%d] Linux alive", info->channel, info->src);
+                        write(info->eptFd, data, strlen(data) + 1);
+                        usleep(10 * 1000);
+                    }
+                }
+            }
+        }
+        pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+    }
+    printf("rpmsg channel%d recv thread exit!\n", info->channel);
+    return (void*)0;
+}
+
+struct rpmsg_info recv[RPMSG_COUNT];
+
 int main()
 {
-        struct ss_rpmsg_endpoint_info info;
+        struct ss_rpmsg_endpoint_info info[RPMSG_COUNT];
         char buffer[6] = "start\0";
+        char stop_buffer[5] = "stop\0";
         char data[512];
         int ret,lenth;
         char devPath[256];
         int fd;
-        int eptFd;
-        int s32Ret = 0;
-        fd_set read_fds;
-        struct timeval TimeoutVal;
         unsigned int index = 0x0;
-        int Mcu_enable = 0;
+        int Mcu_enable[RPMSG_COUNT] = {0, 0};
         unsigned long last, now;
         unsigned int count;
-
-        memset(&info, 0, sizeof(info));
-        info.src = EPT_ADDR_MACRO(EPT_TYPE_CUSTOMER, 1);
-        info.dst = EPT_ADDR_MACRO(EPT_TYPE_CUSTOMER, 2);
-        snprintf(info.name, sizeof(info.name), "demo");
-        info.mode = RPMSG_MODE_RISCV;
-        info.target_id = 0;
-
+        int i = 0;
         fd = open("/dev/rpmsg_ctrl0", O_RDWR);
         if (fd < 0)
         {
@@ -399,72 +458,84 @@ int main()
             return 0;
         }
         printf("open rpmsg_ctrl0 success!\n");
-        if (ioctl(fd, SS_RPMSG_CREATE_EPT_IOCTL, &info) < 0)
+        for(i = 0; i < RPMSG_COUNT; i++)
         {
-            perror("ioctl:");
-            return 0;
-        }
+            memset(&info[i], 0, sizeof(struct ss_rpmsg_endpoint_info));
+            memset(&recv[i], 0, sizeof(struct rpmsg_info));
+            info[i].src = EPT_ADDR_MACRO(EPT_TYPE_CUSTOMER, 1 + 2 * i);
+            recv[i].src = 1 + 2 * i;
+            info[i].dst = EPT_ADDR_MACRO(EPT_TYPE_CUSTOMER, 2 + 2 * i);
+            recv[i].dst = 2 + 2 * i;
+            snprintf(info[i].name, sizeof(info[i].name), "demo%d", i);
+            info[i].mode = RPMSG_MODE_RISCV;
+            info[i].target_id = 0;
 
-        sleep(2);
-        snprintf(devPath, sizeof(devPath), "/dev/rpmsg%d", info.id);
-        eptFd = open(devPath, O_RDWR);
-
-        if (eptFd < 0)
-        {
-            fprintf(stderr, "Failed to open endpoint!\n");
-            return 0;
-        }
-        printf("open rpmsg0 success!\n");
-
-        last = now = get_current_tick();
-        TimeoutVal.tv_sec = 2;
-        TimeoutVal.tv_usec = 0;
-        while (1)
-        {
-            if(Mcu_enable == 0)
+            if (ioctl(fd, SS_RPMSG_CREATE_EPT_IOCTL, &info[i]) < 0)
             {
-                ret = write(eptFd, buffer, strlen(buffer) + 1);
-                if(ret > 0)
-                {
-                    printf("write start message to Mcu success!\n");
-                    Mcu_enable = 1;
-                }
+                perror("ioctl:");
+                close(fd);
+                return 0;
             }
-            else
+
+            sleep(2);
+            snprintf(devPath, sizeof(devPath), "/dev/rpmsg%d", info[i].id);
+            recv[i].eptFd = open(devPath, O_RDWR);
+            printf("open /dev/rpmsg%d success!\n", info[i].id);
+            if (recv[i].eptFd < 0)
             {
-                //select Mcu message
-                FD_ZERO(&read_fds);
-                FD_SET(eptFd, &read_fds);
-                //printf("select rpmsg dev!\n");
-                s32Ret = select(eptFd + 1, &read_fds, NULL, NULL, &TimeoutVal);
-                if(s32Ret < 0)
+                fprintf(stderr, "Failed to open endpoint!\n");
+                return 0;
+            }
+            recv[i].channel = info[i].id;
+        }
+        last = now = get_current_tick();
+        for(i = 0; i < RPMSG_COUNT; i++)
+        {
+            if(Mcu_enable[i] == 0)
+            {   
+                while (1)
                 {
-                    printf("rpmsg select failed\n");
-                    usleep(10 * 1000);
-                    continue;
-                }
-                else if(s32Ret == 0)
-                {
-                    usleep(10 * 1000);
-                    continue;
-                }
-                else
-                {
-                    if(FD_ISSET(eptFd, &read_fds)){
-                        //printf("Mcu reday send message\n");
-                        memset(data, 0, sizeof(data));
-                        ret = read(eptFd, data, sizeof(data));
-                        if (ret > 0)
-                        {
-                            //printf("Linux read %s\n", data);
-                            parse_message(eptFd, data);
-                        }
+                    snprintf(data, sizeof(data), "rpmsg [channel:%d;Linux ept:%d] send: %s", recv[i].channel, recv[i].src, buffer);
+                    ret = write(recv[i].eptFd, data, strlen(data) + 1);
+                    if(ret > 0)
+                    {
+                        printf("rpmsg [channel:%d;linux ept:%d] write start message to Mcu success!\n", recv[i].channel, recv[i].src);
+                        Mcu_enable[i] = 1;
+                        break;
                     }
                 }
             }
-
         }
-
+        for(i = 0; i < RPMSG_COUNT; i++)
+        {
+            recv[i].exit = 1;                
+            pthread_create(&recv[i].recv_thread, NULL, rpmsg_recv, (void*)&recv[i]);
+        }
+        getchar();
+        for(i = 0; i < RPMSG_COUNT; i++)
+        {    
+            recv[i].exit = 0;
+            if(i == (RPMSG_COUNT - 1))
+            {
+                ret = write(recv[i].eptFd, stop_buffer, strlen(stop_buffer) + 1);
+                if(ret > 0)
+                {
+                    printf("rpmsg [channel:%d;linux ept:%d] write stop message to Mcu success!\n", recv[i].channel, recv[i].src);
+                }
+            }
+        }
+        for(i = 0; i < RPMSG_COUNT; i++)
+        {
+            if(recv[i].recv_thread)
+            {
+                //printf("rpmsg channel%d recv thread join and exit[%d]!\n", recv[i].channel, recv[i].exit);
+                pthread_join(recv[i].recv_thread, NULL);
+            }
+            close(recv[i].eptFd);
+            printf("close /dev/rpmsg%d success!\n", recv[i].channel);
+        }
+        close(fd);
+        printf("close rpmsg_ctrl0 success!\n");      
         return 0;
 
 }

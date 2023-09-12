@@ -8,6 +8,6 @@ CC := aarch64-linux-gnu-gcc
 CPP := aarch64-linux-gnu-g++
 endif
 rpmsg_demo:./src/rpmsg_demo.c
-    $(CC) -o ./bin/rpmsg_demo ./src/rpmsg_demo.c -I./inc
+	$(CC) -o ./bin/rpmsg_demo ./src/rpmsg_demo.c -I./inc -lpthread
 clean:
-    rm -rf ./bin/rpmsg_demo
+	rm -rf ./bin/rpmsg_demo
