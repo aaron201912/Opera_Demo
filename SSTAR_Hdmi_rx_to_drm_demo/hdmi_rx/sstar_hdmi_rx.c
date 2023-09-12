@@ -308,7 +308,7 @@ void* hdmi_rx_plug_detection(void* param)
 					    memset(&HvpChnParam, 0, sizeof(MI_HVP_ChannelParam_t));
 					    ExecFunc(MI_HVP_GetChannelParam(HvpDevId, HvpChnId, &HvpChnParam), MI_SUCCESS);
 					    // src
-					    HvpChnParam.stChnSrcParam.bPixelRepetitive = bPixel_Repetitive;
+					    HvpChnParam.stChnSrcParam.enPixRepType = bPixel_Repetitive;
 					    HvpChnParam.stChnSrcParam.enColorDepth = eColor_depth;
 					    HvpChnParam.stChnSrcParam.stCropWin.u16X = (MI_U16)0;
 					    HvpChnParam.stChnSrcParam.stCropWin.u16Y = (MI_U16)0;
@@ -327,7 +327,7 @@ void* hdmi_rx_plug_detection(void* param)
 					    HvpChnParam.stChnDstParam.stDispWin.u16Height = (MI_U16)vdec_info.v_out_height;
 					    HvpChnParam.stChnDstParam.u16Width = (MI_U16)vdec_info.v_out_width;
 					    HvpChnParam.stChnDstParam.u16Height = (MI_U16)vdec_info.v_out_height;
-					    HvpChnParam.stChnDstParam.u16Fpsx100 = (MI_U16)TimingInfo.u32FrameRate;
+					    HvpChnParam.stChnDstParam.u16Fpsx100 = (MI_U16)TimingInfo.u32FrameRate * 100;
 					    ExecFunc(MI_HVP_SetChannelParam(HvpDevId, HvpChnId, &HvpChnParam), MI_SUCCESS);
 					
 					    OutputPort.eModId = E_MI_MODULE_ID_HVP;
