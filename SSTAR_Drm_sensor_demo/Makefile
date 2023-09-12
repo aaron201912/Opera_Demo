@@ -107,8 +107,8 @@ $(TARGET_NAME): $(CPP_OBJS) $(CPP_SRCS) $(C_OBJS) $(C_SRCS)
 
 %.c.o : %.c
 	@echo "compile $@"
-	@$(CC) -DENABLE_HDMI=$(ENABLE_HDMI)  $(C_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@
+	@$(CC) $(C_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@
 
 %.cpp.o : %.cpp
 	@echo "compile $@"
-	@$(CPP) -DENABLE_HDMI=$(ENABLE_HDMI)  $(CPP_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@
+	@$(CPP) $(CPP_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@
