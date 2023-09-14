@@ -7,7 +7,7 @@ endif
 ifeq ($(TOOLCHAIN_VERSION),10.2.1)
 export CROSS_COMPILE=/tools/toolchain/gcc-10.2.1-20210303-sigmastar-glibc-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-
 endif
-PROJ_ROOT=/users/peng.xiong/Opera_V2.0.0/project
+PROJ_ROOT=../../../../P5_SDK_v3.0/project
 
 #test
 TEST_OBJECT:= ./test_draw.cpp
@@ -27,13 +27,13 @@ endif
 #dynamic
 LIBS_SHARED_TEST += -L $(PROJ_ROOT)/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/mi_libs/dynamic -lmi_ipu  -lmi_sys -lmi_common
 LIBS_SHARED_TEST += -L $(PROJ_ROOT)/release/chip/p5/sigma_common_libs/glibc/$(TOOLCHAIN_VERSION)/dynamic -lcam_fs_wrapper -lcam_os_wrapper  
-LIBS_SHARED_TEST += -L ./$(LIB_PATH) -lsstar_algo_detection -lsstar_algo
+LIBS_SHARED_TEST += -L ./$(LIB_PATH) -lsstaralgo_det
 LIBS_SHARED_TEST += -L ./$(LIB_PATH)/shared_opencv
 LIBS_SHARED_TEST += -lopencv_imgcodecs -lopencv_imgproc -lopencv_core 
 #static
 LIBS_STATICT_TEST += -L $(PROJ_ROOT)/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/mi_libs/static -lmi_ipu -lmi_sys -lmi_common
 LIBS_STATICT_TEST += -L $(PROJ_ROOT)/release/chip/p5/sigma_common_libs/glibc/$(TOOLCHAIN_VERSION)/static -lcam_fs_wrapper -lcam_os_wrapper
-LIBS_STATICT_TEST += -L ./$(LIB_PATH) -lsstar_algo_detection -lsstar_algo
+LIBS_STATICT_TEST += -L ./$(LIB_PATH) -lsstaralgo_det
 LIBS_STATICT_TEST += -L ./$(LIB_PATH)/static_opencv
 LIBS_STATICT_TEST += -L ./$(LIB_PATH)/static_opencv/opencv4/3rdparty
 LIBS_STATICT_TEST += -lopencv_imgcodecs -lopencv_imgproc -lopencv_core -littnotify -llibjasper  -llibjpeg-turbo  -llibpng -llibtiff  -llibwebp -ltegra_hal -lzlib

@@ -43,7 +43,7 @@
 #include "mi_ipu.h"
 #include "mi_sys.h"
 
-#include "sstar_detection_api.h"
+#include "sstar_det_api.h"
 
 #ifdef ALIGN_UP
 #undef ALIGN_UP
@@ -63,6 +63,7 @@
 #define DST_IMAGE_SIZE (1920*1080*4)
 #define ST_DEFAULT_SOC_ID 0
 
+#define MAX_DET_OBJECT 200
 
 void * manager;
 
@@ -94,8 +95,6 @@ typedef struct{
 }ipu_rect;
 
 //global 
-ipu_rect rectA;
-std::vector<ipu_rect> bboxes;
 
 MI_S32 create_device_callback(MI_IPU_DevAttr_t* stDevAttr, char *pFirmwarePath)
 {
@@ -106,6 +105,10 @@ void destory_device_callback()
 {
 	MI_IPU_DestroyDevice();
 }
+
+#if 0
+ipu_rect rectA;
+std::vector<ipu_rect> bboxes;
 
 void detect_callback(std::vector<Box_t> results)
 {
@@ -131,7 +134,7 @@ void detect_callback(std::vector<Box_t> results)
 	}
 
 }
-
+#endif
 
 void parse_images_dir(const std::string& base_path, std::vector<std::string>& file_path)
 {
@@ -159,12 +162,9 @@ void parse_images_dir(const std::string& base_path, std::vector<std::string>& fi
 DetectionInfo_t detection_info_yuv = 
 {
     "/config/dla/ipu_lfw.bin",
-    "./model2/sypcd2480509_fixed.sim_sgsimg.img",
-    0.5, //threshold
+    "/customer/res/syfdy2.48_V3.10S_20230506_fixed.sim_sgsimg.img",
+    0.4, //threshold
     {800, 480}, //转成显示的坐标
-    create_device_callback,
-    detect_callback,
-	destory_device_callback,
 };
 
 DetectionInfo_t detection_info_argb = 
@@ -173,9 +173,6 @@ DetectionInfo_t detection_info_argb =
     "./sypfa5.480302_fixed.sim_sgsimg.img",
     0.4, //threshold
     {800, 480}, //转成显示的坐标
-    create_device_callback,
-    detect_callback,
-	destory_device_callback,
 };
 
 static float calcIOU(ipu_rect rectA1, ipu_rect rectB)
@@ -379,11 +376,11 @@ void renew_output() {
 }
 
 void showUsage() {
-    std::cout << "Usage: ./prog_dla_label_image --images --input_format" << std::endl;
+    std::cout << "Usage: ./prog_dla_label_image --images  --input_format  --format " << std::endl;
     std::cout << " -h, --help      show this help message and exit" << std::endl;
     std::cout << " -i, --images    path to validation image or images' folder" << std::endl;
-	std::cout << " -s, --input_format      select data input format: argb8888 / yuv, default=argb8888" << std::endl;
-    std::cout << "     --format    model input format (Default is BGRA):" << std::endl;
+	std::cout << " -s, --input_format      select data input image format: rgb / argb8888 / yuv, default=rgb" << std::endl;
+    std::cout << "     --format    model input format (Default is YUV_NV12):" << std::endl;
     std::cout << "                 BGR / RGB / BGRA / RGBA / YUV_NV12 / GRAY / RAWDATA_S16_NHWC" << std::endl;
 }
 
@@ -434,10 +431,10 @@ int main(int argc, char* argv[]) {
     }
 	if (input_format == NULL) {
         std::cout <<  "if (input_format == NULL) { "<< std::endl;
-        input_format = "argb8888";
+        input_format = "rgb";
     }
 	if (mFormat.empty()) {
-        mFormat = "BGRA";
+        mFormat = "YUV_NV12";
     }
     else if ((mFormat != "BGR") && (mFormat != "RGB") && (mFormat != "BGRA") && (mFormat != "RGBA") &&
             (mFormat != "YUV_NV12") && (mFormat != "GRAY") && (mFormat != "RAWDATA_S16_NHWC")) {
@@ -502,20 +499,20 @@ int main(int argc, char* argv[]) {
 	memset(pVirSrcBufAddr, 0, srcBuffSize);
 	
 	// enter sdk
-	getDetectionManager(&manager);
-	if(0 == strcmp(input_format, "rgb")){
-		initDetection(manager, &detection_info_argb);
+    MI_IPU_DevAttr_t stIpuDevAttr;
+    memset(&stIpuDevAttr, 0x0, sizeof(MI_IPU_DevAttr_t));
+    stIpuDevAttr.u32MaxVariableBufSize = 800 * 480 * 4;
+    create_device_callback(&stIpuDevAttr, detection_info_argb.ipu_firmware_path);
+	ALGO_DET_CreateHandle(&manager);
+	if(mFormat == "BGRA"){
+		ALGO_DET_InitHandle(manager, &detection_info_argb);
         printf("the input format is BGRA \n");
 	}
-	else if(0 == strcmp(input_format, "argb8888")){
-		initDetection(manager, &detection_info_argb);
-        printf("the input format is ARGB8888 \n");
-	}
 	else{
-		initDetection(manager, &detection_info_yuv);
+		ALGO_DET_InitHandle(manager, &detection_info_yuv);
         printf("the input format is YUV_NV12 \n");
 	}
-	startDetect(manager);
+	//startDetect(manager);
 	
 	PreProcessedData stProcessedData;
 	stProcessedData.iResizeH = 480;
@@ -591,11 +588,18 @@ int main(int argc, char* argv[]) {
             }
         // doSnDetect(manager, &stBufInfo);
         //doDetectPerson(manager, &stBufInfo);
-		doDetect(manager, &stBufInfo);
-		
+        ALGO_Input_t algo_input;
+        MI_S32 num_bboxes;
+        Box_t bboxes[MAX_DET_OBJECT];
+        memset(&algo_input, 0x0, sizeof(ALGO_Input_t));
+        algo_input.p_vir_addr = stBufInfo.stFrameData.pVirAddr[0];
+        algo_input.phy_addr = stBufInfo.stFrameData.phyAddr[0];
+        algo_input.buf_size = stBufInfo.stFrameData.u32BufSize;
+        algo_input.pts = stBufInfo.u64Pts;  
+		ALGO_DET_Run(manager, &algo_input, bboxes, &num_bboxes);
         printf("---->image path: %s\n",images[idx].c_str());
 
-        for(int i = 0; i < bboxes.size(); i++)
+        for(int i = 0; i < num_bboxes; i++)
 		{
 
 			cv::Rect rect(
@@ -629,7 +633,7 @@ int main(int argc, char* argv[]) {
 
             cv::putText(
                 src, 
-                r_label_text + "0." + std::__cxx11::to_string(int(bboxes[i].prob * 100)),
+                r_label_text + "0." + std::__cxx11::to_string(int(bboxes[i].score * 100)),
                 cv::Point(
                     float(bboxes[i].x),
                     float(bboxes[i].y)),
