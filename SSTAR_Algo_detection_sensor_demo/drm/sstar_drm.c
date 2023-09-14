@@ -283,8 +283,11 @@ frame_t* get_last_queue(frame_queue_t *Queue_t, enum queue_state state)
         }
         else
         {
+            if(Queue_t->size == 0)
+                frame_queue_peek_end(Queue_t);
+            else
+                frame_queue_next(Queue_t, pQueue);
             usleep(1*1000);
-            frame_queue_next(Queue_t, pQueue);
             count_num --;
         }
     }
@@ -410,11 +413,11 @@ void* drm_buffer_loop(void* param)
     struct timeval timeEnqueue3;
     #endif
     buffer_object_t * buf_obj = (buffer_object_t *)param;
-    memset(&mi_dma_buf_info, 0x0, sizeof(MI_SYS_DmaBufInfo_t));
     MI_SYS_GetFd(&buf_obj->chn_port_info, &buf_obj->_g_mi_sys_fd);
     //usleep(500*1000);
     while (!buf_obj->bExit)
     {
+        memset(&mi_dma_buf_info, 0x0, sizeof(MI_SYS_DmaBufInfo_t));
         pQueue = get_last_queue(&buf_obj->_EnQueue_t, DEQUEUE_STATE);
         if( pQueue !=NULL && pQueue->frame != NULL )
         {
@@ -426,16 +429,16 @@ void* drm_buffer_loop(void* param)
             continue;
         }
         dma_buf_handle = dma_info->dma_buf_fd;
-        mi_dma_buf_info.u16Width = buf_obj->vdec_info.v_src_width;
-        mi_dma_buf_info.u16Height = buf_obj->vdec_info.v_src_height;
-        mi_dma_buf_info.eCompressMode = E_MI_SYS_COMPRESS_MODE_NONE;
-        mi_dma_buf_info.eFormat = E_MI_SYS_PIXEL_FRAME_YUV_SEMIPLANAR_420;
-        mi_dma_buf_info.s32Fd[0] = dma_buf_handle;
-        mi_dma_buf_info.s32Fd[1] = dma_buf_handle;
-        mi_dma_buf_info.u32Stride[0] = buf_obj->vdec_info.v_src_stride;
-        mi_dma_buf_info.u32Stride[1] = buf_obj->vdec_info.v_src_stride;
-        mi_dma_buf_info.u32DataOffset[0] = 0;
-        mi_dma_buf_info.u32DataOffset[1] = buf_obj->vdec_info.v_src_width * buf_obj->vdec_info.v_src_height;
+        // mi_dma_buf_info.u16Width = buf_obj->vdec_info.v_src_width;
+        // mi_dma_buf_info.u16Height = buf_obj->vdec_info.v_src_height;
+        // mi_dma_buf_info.eCompressMode = E_MI_SYS_COMPRESS_MODE_NONE;
+        // mi_dma_buf_info.eFormat = E_MI_SYS_PIXEL_FRAME_YUV_SEMIPLANAR_420;
+        // mi_dma_buf_info.s32Fd[0] = dma_buf_handle;
+        // mi_dma_buf_info.s32Fd[1] = dma_buf_handle;
+        // mi_dma_buf_info.u32Stride[0] = buf_obj->vdec_info.v_src_stride;
+        // mi_dma_buf_info.u32Stride[1] = buf_obj->vdec_info.v_src_stride;
+        // mi_dma_buf_info.u32DataOffset[0] = 0;
+        // mi_dma_buf_info.u32DataOffset[1] = buf_obj->vdec_info.v_src_width * buf_obj->vdec_info.v_src_height;
 
         #if 0
         gettimeofday(&timeEnqueue1, NULL);
@@ -445,8 +448,11 @@ void* drm_buffer_loop(void* param)
         pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
         if (dma_buf_handle > 0)
         {
-            while(0 != MI_SYS_ChnOutputPortDequeueDmabuf(&buf_obj->chn_port_info, &mi_dma_buf_info) && dequeue_try_cnt < 30)
+            while(dequeue_try_cnt < 100)
             {
+                ret = MI_SYS_ChnOutputPortDequeueDmabuf(&buf_obj->chn_port_info, &mi_dma_buf_info);
+                if(ret == 0)
+                    break;
                 dequeue_try_cnt++;
                 sync_wait_sys(buf_obj->_g_mi_sys_fd, 10);
             }
@@ -456,7 +462,7 @@ void* drm_buffer_loop(void* param)
                 eTime2 = timeEnqueue2.tv_sec*1000 + timeEnqueue2.tv_usec/1000;
             #endif
             #if 1
-            if((mi_dma_buf_info.u32Status != MI_SYS_DMABUF_STATUS_INVALID) && (mi_dma_buf_info.u32Status != MI_SYS_DMABUF_STATUS_DROP))
+            if(ret == 0 && (mi_dma_buf_info.u32Status == MI_SYS_DMABUF_STATUS_DONE))
             {
                 if(0 != sstar_drm_update(buf_obj, dma_buf_handle))
                 {
@@ -464,10 +470,10 @@ void* drm_buffer_loop(void* param)
                     continue;
                 }
             }
-            // else
-            // {
-            //      printf("Error frame,u32Status=0x%x  0x%x 0x%x\n",mi_dma_buf_info.u32Status,MI_SYS_DMABUF_STATUS_DONE,MI_SYS_DMABUF_STATUS_DROP);
-            // }
+            //else
+            //{
+            //    printf("Error frame,u32Status=0x%x  0x%x 0x%x\n",mi_dma_buf_info.u32Status, MI_SYS_DMABUF_STATUS_DONE, MI_SYS_DMABUF_STATUS_DROP);
+            //}
             #endif
             //sstar_algo_fps();
             #if 0
@@ -482,6 +488,7 @@ void* drm_buffer_loop(void* param)
 
             dma_info->buf_in_use = IDLEQUEUE_STATE;
             frame_queue_next(&buf_obj->_EnQueue_t, pQueue);
+            dequeue_try_cnt = 0;
             timeout = 100;
             sem_post(&buf_obj->sem_avail);
         }
@@ -930,6 +937,7 @@ static void modeset_destroy_fb(buffer_object_t *bo)
 
 	destroy.handle = bo->handle;
 	drmIoctl(bo->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+    printf("modeset_clear_fb success\n");
     #if 0
 	drmModeRmFB(bo->fd, bo->fb_id_1);
 
@@ -942,29 +950,31 @@ static void modeset_destroy_fb(buffer_object_t *bo)
 
 void sstar_mode_set(buffer_object_t *buf)
 {
+	if(buf->format != 0 && buf->plane_id != 0)
+	{
+		if(modeset_create_fb(buf) != 0)
+	    {
+	        printf("modeset_create_fb fail \n");
+	        //return ;
+	    }
+	}
     int ret;
     ret = drmSetClientCap(buf->fd, DRM_CLIENT_CAP_ATOMIC, 1);
     if(ret != 0)
     {
         printf("drmSetClientCap DRM_CLIENT_CAP_ATOMIC ret=%d  \n",ret);
     }
-    init_drm_property_ids(buf);
-
-	if(buf->vdec_info.plane_type == MOPG)
-	{
-		if(modeset_create_fb(buf) != 0)
-	    {
-	        printf("modeset_create_fb fail \n");
-	        return ;
-	    }
-	}
+    if(buf->plane_id != 0)
+        init_drm_property_ids(buf, buf->plane_id, &buf->prop_ids);
+    if(buf->vdec_info.plane_id != 0)
+        init_drm_property_ids(buf, buf->vdec_info.plane_id, &buf->vdec_info.prop_ids);
     return ;
 }
 
 void sstar_drm_deinit(buffer_object_t *buf)
 {
-    if(buf->vdec_info.plane_type == MOPG)
-	{
+    if(buf->vaddr_0 != NULL)
+    {
         modeset_destroy_fb(buf);
     }
     if(_g_conn != NULL)
@@ -1052,7 +1062,7 @@ void sstar_drm_close(int fd)
 void sstar_drm_init(buffer_object_t *buf)
 {
     int i,j;
-    buf->plane_id = get_plane_with_format(buf->fd,  buf->format);
+    //buf->plane_id = get_plane_with_format(buf->fd,  buf->format);
     sort_plane_type(buf->fd, 0);
     #if 0
     for(i = 0;i < PLANE_TYPE_MAX; i++)
@@ -1063,7 +1073,14 @@ void sstar_drm_init(buffer_object_t *buf)
         }
     }
     #endif
-	buf->vdec_info.plane_id = plane_type[buf->vdec_info.plane_type][0];
+    if(buf->format == DRM_FORMAT_ARGB8888)
+        buf->plane_id = plane_type[GOP_UI][0];
+    else if(buf->format == DRM_FORMAT_NV12)
+        buf->plane_id = plane_type[MOPS][0];
+    if(buf->vdec_info.plane_type == MOPG)
+        buf->vdec_info.plane_id = plane_type[buf->vdec_info.plane_type][1];
+    else
+        buf->vdec_info.plane_id = plane_type[buf->vdec_info.plane_type][0];
     printf("plane_id=%d vdec_plane_id=%d width=%d height=%d\n",buf->plane_id, buf->vdec_info.plane_id,buf->width,buf->height);
 #ifdef DUMP_RES
     printf("***************************conn_count=%d *******************************\n",_g_res->count_connectors);
@@ -1131,7 +1148,7 @@ static int get_property_id(int fd, drmModeObjectProperties* props, const char* n
     return id;
 }
 
-int init_drm_property_ids(buffer_object_t *buf)//int fd, uint32_t crtc_id, uint32_t plane_id, uint32_t conn_id,drm_property_ids_t* prop_ids)
+int init_drm_property_ids(buffer_object_t *buf, uint32_t plane_id, drm_property_ids_t* prop_ids)//int fd, uint32_t crtc_id, uint32_t plane_id, uint32_t conn_id,drm_property_ids_t* prop_ids)
 {
 
     drmModeObjectProperties* props;
@@ -1139,9 +1156,9 @@ int init_drm_property_ids(buffer_object_t *buf)//int fd, uint32_t crtc_id, uint3
     int ret;
     int fd = buf->fd;
     uint32_t crtc_id = buf->crtc_id;
-    uint32_t plane_id = buf->vdec_info.plane_id;
+    //uint32_t plane_id = buf->vdec_info.plane_id;
     uint32_t conn_id = buf->conn_id;
-    drm_property_ids_t* prop_ids = &buf->vdec_info.prop_ids;
+    //drm_property_ids_t* prop_ids = &buf->vdec_info.prop_ids;
 
     if(fd == -1 || crtc_id == -1 || plane_id == -1 || conn_id  == -1)
     {
@@ -1241,12 +1258,12 @@ static int drm_atomic_commit(buffer_object_t *bobj ,dma_info_t* dma_info) {
 		printf("SRC_H = %d\n", bobj->vdec_info.v_src_height);
 		drmModeAtomicAddProperty(req, bobj->vdec_info.plane_id, prop_ids->CRTC_X, bobj->vdec_info.v_out_x);
         drmModeAtomicAddProperty(req, bobj->vdec_info.plane_id, prop_ids->CRTC_Y, bobj->vdec_info.v_out_y);
-        drmModeAtomicAddProperty(req, bobj->vdec_info.plane_id, prop_ids->CRTC_W, bobj->vdec_info.v_out_width);
-        drmModeAtomicAddProperty(req, bobj->vdec_info.plane_id, prop_ids->CRTC_H, bobj->vdec_info.v_out_height);   
+        drmModeAtomicAddProperty(req, bobj->vdec_info.plane_id, prop_ids->CRTC_W, bobj->width);
+        drmModeAtomicAddProperty(req, bobj->vdec_info.plane_id, prop_ids->CRTC_H, bobj->height);   
         printf("CRTC_X = %d\n", bobj->vdec_info.v_out_x);
 		printf("CRTC_Y = %d\n", bobj->vdec_info.v_out_y);
-        printf("CRTC_W = %d\n", bobj->vdec_info.v_out_width);
-        printf("CRTC_H = %d\n", bobj->vdec_info.v_out_height);
+        printf("CRTC_W = %d\n", bobj->width);
+        printf("CRTC_H = %d\n", bobj->height);
 
         drmModeAtomicAddProperty(req, bobj->crtc_id, prop_ids->ACTIVE, 1);
         drmModeAtomicAddProperty(req, bobj->crtc_id, prop_ids->MODE_ID, blob_id);

@@ -29,17 +29,42 @@ extern "C" {
 /***************************************************************
 ALIGN DEFINE
 ***************************************************************/
-#define ALIGN_NUM 4
+#define ALIGN_NUM 16
 #define ALIGN_BACK(x, a)            (((x) / (a)) * (a))
 #define ALIGN_UP(x, a)            (((x+a-1) / (a)) * (a))
+
 /***************************************************************
 FUNC DEFINE
 ***************************************************************/
+#define ASCII_COLOR_RED                          "\033[1;31m"
+#define ASCII_COLOR_WHITE                        "\033[1;37m"
+#define ASCII_COLOR_YELLOW                       "\033[1;33m"
+#define ASCII_COLOR_BLUE                         "\033[1;36m"
+#define ASCII_COLOR_GREEN                        "\033[1;32m"
+#define ASCII_COLOR_END                          "\033[0m"
+
 #define CheckFuncResult(result)\
     if (result != SUCCESS)\
     {\
         printf("[%s %d]exec function failed\n", __FUNCTION__, __LINE__);\
     }\
+
+#ifndef STCHECKRESULT
+#define STCHECKRESULT(_func_) \
+		do{ \
+			MI_S32 s32Ret = MI_SUCCESS; \
+			s32Ret = _func_; \
+			if (s32Ret != MI_SUCCESS) \
+			{ \
+				printf("[%s %d]exec function failed, error:%x\n", __func__, __LINE__, s32Ret); \
+				return s32Ret; \
+			} \
+			else \
+			{ \
+				printf("[%s %d]exec function pass\n", __func__, __LINE__); \
+			} \
+		} while(0)
+#endif
 
 #ifndef ExecFunc
 #define ExecFunc(_func_, _ret_) \
@@ -57,12 +82,38 @@ FUNC DEFINE
 			} \
 		} while(0)
 #endif
+
 #define PrintInfo(fmt, args...)                                    \
     do {                                                           \
         printf(ASCII_COLOR_BLUE "I/[%s:%d] ", __func__, __LINE__); \
         printf(fmt, ##args);                                       \
         printf(ASCII_COLOR_END);                                   \
     } while (0)
+
+#define ST_DBG(fmt, args...)                                       \
+    do {                                                           \
+        printf(ASCII_COLOR_GREEN "[DBG][%s:%d] ", __func__, __LINE__);\
+        printf(fmt, ##args);                                       \
+    } while (0)
+
+#define ST_WARN(fmt, args...)                                       \
+    do {                                                           \
+        printf(ASCII_COLOR_YELLOW "[WARN][%s:%d] ", __func__, __LINE__);\
+        printf(fmt, ##args);                                       \
+    } while (0)
+
+#define ST_INFO(fmt, args...)                                       \
+    do {                                                           \
+        printf("[INFO][%s:%d] ", __func__, __LINE__);\
+        printf(fmt, ##args);                                       \
+    } while (0)
+
+#define ST_ERR(fmt, args...)                                       \
+    do {                                                           \
+        printf(ASCII_COLOR_RED "[ERR][%s:%d] ", __func__, __LINE__);\
+        printf(fmt, ##args);                                       \
+    } while (0)
+
 /***************************************************************
 SENSOR PARAM
 ***************************************************************/
@@ -172,6 +223,19 @@ typedef struct drm_property_ids {
     uint32_t zpos;
     uint32_t realtime_mode;
 } drm_property_ids_t;
+
+/***************************************************************
+SYSBIND PARAM
+***************************************************************/
+typedef struct {
+    MI_SYS_ChnPort_t stSrcChnPort;
+    MI_SYS_ChnPort_t stDstChnPort;
+    MI_U32 u32SrcFrmrate;
+    MI_U32 u32DstFrmrate;
+    MI_SYS_BindType_e eBindType;
+    MI_U32 u32BindParam;
+} Sys_BindInfo_T;
+
 /***************************************************************
 OBJECT_BUFF PARAM
 ***************************************************************/
@@ -189,9 +253,11 @@ typedef struct vdec_info
     int v_out_height;
     int v_out_stride;
     int v_out_size;
+
     int v_bframe;
     uint32_t plane_id;
     uint32_t format;
+    int pixelformat;
     int plane_type;
     int out_fence;
     drm_property_ids_t prop_ids;
@@ -228,6 +294,7 @@ typedef struct buffer_object_s {
     MI_SYS_ChnPort_t rgn_chn_port_info;
     int face_detect;
     int venc_flag;
+    int vdec_flag;
     int hvp_realtime;
     char *iq_file;
     char *model_path;
@@ -243,9 +310,12 @@ typedef struct buffer_object_s {
     dma_info_t dma_info[MAX_NUM_OF_DMABUFF];
 	int bExit;
 	int bExit_second;
-    char * video_file;
+    char video_file[128];
 }buffer_object_t;
 extern buffer_object_t _g_buf_obj[];
+
+MI_S32 bind_port(Sys_BindInfo_T* pstBindInfo);
+MI_S32 unbind_port(Sys_BindInfo_T* pstBindInfo);
 
 #if defined (__cplusplus)
 }

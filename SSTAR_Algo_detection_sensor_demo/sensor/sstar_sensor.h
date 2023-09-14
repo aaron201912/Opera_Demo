@@ -21,25 +21,17 @@ extern "C" {
 
 #include "mi_common_datatype.h"
 #include "mi_isp.h"
-#include "mi_scl.h"
 #include "mi_sensor.h"
 #include "mi_sensor_datatype.h"
 #include "mi_sys.h"
 #include "mi_sys_datatype.h"
 #include "mi_vif.h"
 #include "common.h"
+#include "sstar_scl.h"
+#include "sstar_venc.h"
 
 #define MAX_SENSOR_NUM (2)
 #define MI_SYS_DEVICE_ID (0)
-
-typedef struct {
-    MI_SYS_ChnPort_t stSrcChnPort;
-    MI_SYS_ChnPort_t stDstChnPort;
-    MI_U32 u32SrcFrmrate;
-    MI_U32 u32DstFrmrate;
-    MI_SYS_BindType_e eBindType;
-    MI_U32 u32BindParam;
-} Sys_BindInfo_T;
 
 /**************************************************
 * Create sensor -> vif -> scl -> venc pipeline, venc select by venc_flag

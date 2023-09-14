@@ -1,23 +1,16 @@
 #TOOLCHAIN_VERSION=10.2.1
 TOOLCHAIN_VERSION ?=6.4.0
+CHIP ?=SSD2386
 ENABLE_LDC=0
-
-ifeq ($(TOOLCHAIN_VERSION),6.4.0)
-CROSS_COMPILE ?=arm-linux-gnueabihf-
-endif
-
-ifeq ($(TOOLCHAIN_VERSION),10.2.1)
-CROSS_COMPILE ?=aarch64-linux-gnu-
-endif
 
 CC  = $(CROSS_COMPILE)gcc
 CPP = $(CROSS_COMPILE)g++
 AR  = $(CROSS_COMPILE)ar
 
-ALKAID_PATH ?= /users/peng.xiong/Opera_V2.0.0
+ALKAID_PATH ?= ../../../../P5_SDK_v3.0
 INTERFACE_CUS3A = enable
 dirs := ./ ./common
-dirs += ./drm ./sensor ./rgn ./algo
+dirs += ./drm ./sensor ./rgn ./algo ./scl ./venc
 OUTPUT_DIR := ./out
 $(info mysdk=$(ALKAID_PATH))
 COM_FLAGS = -Wall -g -fPIC
@@ -26,7 +19,7 @@ C_FLAGS  = $(COM_FLAGS) -std=gnu11
 CPP_FLAGS  = $(COM_FLAGS) -std=gnu++11
 
 INCLUDES  := -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include -I$(ALKAID_PATH)/project/release/include/isp -I$(ALKAID_PATH)/project/release/include/isp/opera -I./include -I$(ALKAID_PATH)/project/release/include/ipu/opera 
-INCLUDES  += -I./common  -I./drm -I./drm/libdrm -I./sensor -I./rgn -I./algo
+INCLUDES  += -I./common  -I./drm -I./drm/libdrm -I./sensor -I./rgn -I./algo -I./scl -I./venc
 
 TARGET_NAME  := Algo_detect_sensor
 
@@ -44,9 +37,28 @@ ifeq ($(TOOLCHAIN_VERSION),6.4.0)
 LIB_PATH  := -L./lib/lib_32 -L./lib/lib_32/algolib
 endif
 
+ifeq ($(TOOLCHAIN_VERSION),10.2.1)
+CROSS_COMPILE ?=aarch64-linux-gnu-
+endif
+
+ifeq ($(TOOLCHAIN_VERSION),6.4.0)
+CROSS_COMPILE ?=arm-linux-gnueabihf-
+endif
+
+ifeq ($(CHIP),SSD2386)
+C_FLAGS += -DCHIP_IS_SSD2386
+CPP_FLAGS += -DCHIP_IS_SSD2386
+else ifeq  ($(CHIP),SSU9383)
+C_FLAGS += -DCHIP_IS_SSU9383
+CPP_FLAGS += -DCHIP_IS_SSU9383
+else ifeq  ($(CHIP),SSD2381)
+C_FLAGS += -DCHIP_IS_SSD2381
+CPP_FLAGS += -DCHIP_IS_SSD2381
+endif
+
 LIB_PATH  += -L$(ALKAID_PATH)/project/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/mi_libs/dynamic
 LIB_PATH  += -L$(ALKAID_PATH)/project/release/chip/p5/sigma_common_libs/glibc/$(TOOLCHAIN_VERSION)/dynamic/
-LIB_NAME := -lm -ldrm -lmi_venc -lmi_isp -lmi_vif -lmi_sensor -lmi_iqserver -lmi_scl -lmi_sys -lmi_rgn -lmi_ipu -lmi_hvp -lmi_common -lsstar_algo -lsstar_algo_detection  -ldl -lcam_os_wrapper  -lcam_fs_wrapper -lpthread
+LIB_NAME := -lm -ldrm -lmi_venc -lmi_isp -lmi_vif -lmi_sensor -lmi_iqserver -lmi_scl -lmi_sys -lmi_rgn -lmi_ipu -lmi_common -lsstaralgo_det -ldl -lcam_os_wrapper  -lcam_fs_wrapper -lpthread
 
 ifeq ($(INTERFACE_CUS3A), enable)
 LIB_NAME += -lcus3a -lispalgo

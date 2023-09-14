@@ -120,10 +120,12 @@ void *sstar_drmfb_get_buffer(int buf_i);
 /**************************************************
 * Commit drm crtc property
 * @param            \b IN: buffer object
+* @param            \b IN: drm plane id
+* @param            \b IN: drm property ids
 * @return           \b OUT: 0:   success
                            -1:   fail
 **************************************************/
-int init_drm_property_ids(buffer_object_t *buf);
+int init_drm_property_ids(buffer_object_t *buf, uint32_t plane_id, drm_property_ids_t* prop_ids);
 
 /**************************************************
 * Select and get drm crtc、conn_id、width、height value

@@ -23,8 +23,8 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 
 #include "common.h"
 //#include "st_rgn.h"
-#include "mi_venc_datatype.h"
-#include "mi_venc.h"
+// #include "mi_venc_datatype.h"
+// #include "mi_venc.h"
 
 static int snr_num = 1;
 
@@ -86,28 +86,28 @@ int get_mi_pad_id(int sensor_id) {
     return gstSensorAttr[sensor_id].eSensorPadID;
 }
 
-static MI_S32 bind_port(Sys_BindInfo_T* pstBindInfo) {
-    MI_S32 ret;
+// static MI_S32 bind_port(Sys_BindInfo_T* pstBindInfo) {
+//     MI_S32 ret;
 
-    ret = MI_SYS_BindChnPort2(0, &pstBindInfo->stSrcChnPort, &pstBindInfo->stDstChnPort,
-                              pstBindInfo->u32SrcFrmrate, pstBindInfo->u32DstFrmrate,
-                              pstBindInfo->eBindType, pstBindInfo->u32BindParam);
-    printf("src(%d-%d-%d-%d)  dst(%d-%d-%d-%d)  %d...\n", pstBindInfo->stSrcChnPort.eModId,
-           pstBindInfo->stSrcChnPort.u32DevId, pstBindInfo->stSrcChnPort.u32ChnId,
-           pstBindInfo->stSrcChnPort.u32PortId, pstBindInfo->stDstChnPort.eModId,
-           pstBindInfo->stDstChnPort.u32DevId, pstBindInfo->stDstChnPort.u32ChnId,
-           pstBindInfo->stDstChnPort.u32PortId, pstBindInfo->eBindType);
+//     ret = MI_SYS_BindChnPort2(0, &pstBindInfo->stSrcChnPort, &pstBindInfo->stDstChnPort,
+//                               pstBindInfo->u32SrcFrmrate, pstBindInfo->u32DstFrmrate,
+//                               pstBindInfo->eBindType, pstBindInfo->u32BindParam);
+//     printf("src(%d-%d-%d-%d)  dst(%d-%d-%d-%d)  %d...\n", pstBindInfo->stSrcChnPort.eModId,
+//            pstBindInfo->stSrcChnPort.u32DevId, pstBindInfo->stSrcChnPort.u32ChnId,
+//            pstBindInfo->stSrcChnPort.u32PortId, pstBindInfo->stDstChnPort.eModId,
+//            pstBindInfo->stDstChnPort.u32DevId, pstBindInfo->stDstChnPort.u32ChnId,
+//            pstBindInfo->stDstChnPort.u32PortId, pstBindInfo->eBindType);
 
-    return ret;
-}
+//     return ret;
+// }
 
-static MI_S32 unbind_port(Sys_BindInfo_T* pstBindInfo) {
-    MI_S32 ret;
+// static MI_S32 unbind_port(Sys_BindInfo_T* pstBindInfo) {
+//     MI_S32 ret;
 
-    ret = MI_SYS_UnBindChnPort(0, &pstBindInfo->stSrcChnPort, &pstBindInfo->stDstChnPort);
+//     ret = MI_SYS_UnBindChnPort(0, &pstBindInfo->stSrcChnPort, &pstBindInfo->stDstChnPort);
 
-    return ret;
-}
+//     return ret;
+// }
 
 int get_free_sensorgst()
 {
@@ -620,134 +620,59 @@ static MI_S32 sstar_deinit_isp(MI_U32 eSnrPadId) {
     return 0;
 }
 /***************************************************************
-VENC INIT AND DEINT
+VENC INIT AND DEINT FOR SENSOR
 ***************************************************************/
-static int sstar_init_venc(buffer_object_t *buf_obj)
+static int sstar_venc_init_for_sensor(buffer_object_t *buf_obj)
 {
     /************************************************
     Step8:  venc init
     *************************************************/
-    MI_VENC_DEV VencDevId = 0;
-    MI_VENC_CHN VencChnId = 0;
-    MI_S32 VencPortId = 0;
-    MI_VENC_ChnAttr_t           stVencChnAttr;
-    MI_VENC_InputSourceConfig_t stVencInputSourceConfig;
-	MI_VENC_InitParam_t stInitParam;
-    int snr_index;
+    sstar_venc_info_t venc_info;
 
-    Sys_BindInfo_T stBindInfo;
-	VencChnId = buf_obj->vencChn;
+    venc_info.venc_dev_id = 0;
+    venc_info.venc_chn_id = buf_obj->vencChn;
+    venc_info.venc_outport = 0;
+    venc_info.venc_out_width = ALIGN_BACK(buf_obj->vdec_info.v_out_width, ALIGN_NUM);
+    venc_info.venc_out_height = ALIGN_BACK(buf_obj->vdec_info.v_out_height, ALIGN_NUM);
+    venc_info.venc_src_chn_port.eModId = buf_obj->chn_port_info.eModId;
+    venc_info.venc_src_chn_port.u32DevId = buf_obj->chn_port_info.u32DevId;
+    venc_info.venc_src_chn_port.u32ChnId = buf_obj->chn_port_info.u32ChnId;
+    venc_info.venc_src_chn_port.u32PortId = buf_obj->chn_port_info.u32PortId;
+    venc_info.venc_src_fps = 60;
+    venc_info.venc_dst_fps = 30;
+    venc_info.venc_bind_type = E_MI_SYS_BIND_TYPE_FRAME_BASE;
+    ExecFunc(sstar_venc_init(&venc_info), MI_SUCCESS);
 
-    snr_index = get_sensorgst_with_id(buf_obj->sensorIdx);
-    if(snr_index == -1)
-    {
-        printf("get_sensorgst_with_id error \n");
-        return -1;
-    }
-
-	memset(&stInitParam, 0, sizeof(MI_VENC_InitParam_t));
-	stInitParam.u32MaxWidth = 1920;
-    stInitParam.u32MaxHeight = 1080;
-	ExecFunc(MI_VENC_CreateDev(VencDevId, &stInitParam), MI_SUCCESS);
-
-    /* 设置编码器属性与码率控制属性 */
-    memset(&stVencChnAttr, 0, sizeof(MI_VENC_ChnAttr_t));
-    stVencChnAttr.stVeAttr.stAttrH264e.u32PicWidth         = ALIGN_BACK(buf_obj->vdec_info.v_out_width, ALIGN_NUM);
-    stVencChnAttr.stVeAttr.stAttrH264e.u32PicHeight        = ALIGN_BACK(buf_obj->vdec_info.v_out_height, ALIGN_NUM);
-    stVencChnAttr.stVeAttr.stAttrH264e.u32MaxPicWidth      = ALIGN_BACK(buf_obj->vdec_info.v_out_width, ALIGN_NUM);
-    stVencChnAttr.stVeAttr.stAttrH264e.u32MaxPicHeight     = ALIGN_BACK(buf_obj->vdec_info.v_out_height, ALIGN_NUM);
-    stVencChnAttr.stVeAttr.stAttrH264e.bByFrame            = TRUE;
-    stVencChnAttr.stVeAttr.stAttrH264e.u32BFrameNum        = 2;
-    stVencChnAttr.stVeAttr.stAttrH264e.u32Profile          = 1;
-    stVencChnAttr.stVeAttr.eType                           = E_MI_VENC_MODTYPE_H264E;
-    stVencChnAttr.stRcAttr.eRcMode                         = E_MI_VENC_RC_MODE_H264CBR;
-    stVencChnAttr.stRcAttr.stAttrH265Cbr.u32BitRate        = 1024 * 1024 * 4;
-    stVencChnAttr.stRcAttr.stAttrH265Cbr.u32SrcFrmRateNum  = 30;
-    stVencChnAttr.stRcAttr.stAttrH264Cbr.u32SrcFrmRateDen  = 1;
-    stVencChnAttr.stRcAttr.stAttrH264Cbr.u32Gop            = 30;
-    stVencChnAttr.stRcAttr.stAttrH264Cbr.u32FluctuateLevel = 0;
-    stVencChnAttr.stRcAttr.stAttrH264Cbr.u32StatTime       = 0;
-
-    printf("venc start MI_VENC_CreateChn\n");
-    ExecFunc(MI_VENC_CreateChn(VencDevId, VencChnId, &stVencChnAttr), MI_SUCCESS);
-
-    /*! 设置输入源的属性
-     *  设置了E_MI_VENC_INPUT_MODE_RING_ONE_FRM那APP 在调用 MI_SYS_BindChnPort2 需要设置
-     *  E_MI_SYS_BIND_TYPE_HW_RING/和相应 ring buffer 高度
-     *  */
-    memset(&stVencInputSourceConfig, 0, sizeof(MI_VENC_InputSourceConfig_t));
-    stVencInputSourceConfig.eInputSrcBufferMode = E_MI_VENC_INPUT_MODE_NORMAL_FRMBASE;
-    ExecFunc(MI_VENC_SetInputSourceConfig(VencDevId, VencChnId, &stVencInputSourceConfig), MI_SUCCESS);
-
-    ExecFunc(MI_VENC_SetMaxStreamCnt(VencDevId, VencChnId, 4), MI_SUCCESS);
-
-	memset(&stBindInfo, 0x0, sizeof(Sys_BindInfo_T));
-    stBindInfo.stSrcChnPort.eModId = E_MI_MODULE_ID_SCL;
-    stBindInfo.stSrcChnPort.u32DevId = gstSensorAttr[snr_index].u32SclDevId;
-    stBindInfo.stSrcChnPort.u32ChnId = gstSensorAttr[snr_index].u32SclChnId;
-    stBindInfo.stSrcChnPort.u32PortId = gstSensorAttr[snr_index].u32SclOutPortId;
-    stBindInfo.stDstChnPort.eModId = E_MI_MODULE_ID_VENC;
-    stBindInfo.stDstChnPort.u32DevId = VencDevId;
-    stBindInfo.stDstChnPort.u32ChnId = VencChnId;
-	stBindInfo.stDstChnPort.u32PortId = VencPortId;
-    stBindInfo.u32SrcFrmrate = 60;
-    stBindInfo.u32DstFrmrate = 30;
-    stBindInfo.eBindType = E_MI_SYS_BIND_TYPE_FRAME_BASE;
-	//stBindInfo.u32BindParam = stSnrPlaneInfo.stCapRect.u16Height;
-    ExecFunc(bind_port(&stBindInfo), MI_SUCCESS);
-    printf("bind SCL(%d %d %d)->VENC(%d %d 0),bind type:%d ", (int)gstSensorAttr[snr_index].u32SclDevId, (int)gstSensorAttr[snr_index].u32SclChnId,
-               (int)gstSensorAttr[snr_index].u32SclOutPortId, (int)VencDevId, (int)VencChnId, stBindInfo.eBindType);
-	ExecFunc(MI_VENC_StartRecvPic(VencDevId, VencChnId), MI_SUCCESS);
     return 0;
 
 }
 
-static int sstar_deinit_venc(buffer_object_t *buf_obj)
+static int sstar_venc_deinit_for_sensor(buffer_object_t *buf_obj)
 {
-    Sys_BindInfo_T stBindInfo;
-    int snr_index;
-    snr_index = get_sensorgst_with_id(buf_obj->sensorIdx);
+    sstar_venc_info_t venc_info;
 
-    if(snr_index == -1)
-    {
-        printf("get_sensorgst_with_id error \n");
-        return -1;
-    }
+    venc_info.venc_dev_id = 0;
+    venc_info.venc_chn_id = buf_obj->vencChn;
+    venc_info.venc_outport = 0;
+    venc_info.venc_src_chn_port.eModId = buf_obj->chn_port_info.eModId;
+    venc_info.venc_src_chn_port.u32DevId = buf_obj->chn_port_info.u32DevId;
+    venc_info.venc_src_chn_port.u32ChnId = buf_obj->chn_port_info.u32ChnId;
+    venc_info.venc_src_chn_port.u32PortId = buf_obj->chn_port_info.u32PortId;
+    venc_info.venc_src_fps = 60;
+    venc_info.venc_dst_fps = 30;
+    venc_info.venc_bind_type = E_MI_SYS_BIND_TYPE_FRAME_BASE;
+    ExecFunc(sstar_venc_deinit(&venc_info), MI_SUCCESS);
 
-    memset(&stBindInfo, 0x0, sizeof(Sys_BindInfo_T));
-
-    stBindInfo.stSrcChnPort.eModId = E_MI_MODULE_ID_SCL;
-    stBindInfo.stSrcChnPort.u32DevId = gstSensorAttr[snr_index].u32SclDevId;
-    stBindInfo.stSrcChnPort.u32ChnId = gstSensorAttr[snr_index].u32SclChnId;
-    stBindInfo.stSrcChnPort.u32PortId = gstSensorAttr[snr_index].u32SclOutPortId;
-    stBindInfo.stDstChnPort.eModId = E_MI_MODULE_ID_VENC;
-    stBindInfo.stDstChnPort.u32DevId = 0;
-    stBindInfo.stDstChnPort.u32ChnId = buf_obj->vencChn;
-    stBindInfo.stDstChnPort.u32PortId = 0;
-    stBindInfo.u32SrcFrmrate = 60;
-    stBindInfo.u32DstFrmrate = 30;
-    stBindInfo.eBindType = E_MI_SYS_BIND_TYPE_FRAME_BASE;
-    ExecFunc(unbind_port(&stBindInfo), MI_SUCCESS);
-	ExecFunc(MI_VENC_StopRecvPic(0, buf_obj->vencChn), MI_SUCCESS);
-    ExecFunc(MI_VENC_DestroyChn(0, buf_obj->vencChn), MI_SUCCESS);
-	ExecFunc(MI_VENC_DestroyDev(0), MI_SUCCESS);
     return 0;
 }
 /***************************************************************
-SCL INIT AND DEINT
+SCL INIT AND DEINT FOR SENSOR
 ***************************************************************/
-static MI_S32 sstar_init_scl(buffer_object_t *buf_obj) 
+static MI_S32 sstar_scl_init_for_sensor(buffer_object_t *buf_obj) 
 {
     MI_S32 ret;
-    MI_SCL_DEV SclDevId;
-    MI_SCL_CHANNEL SclChnId;
-    MI_SCL_PORT SclOutPortId;
-    MI_SCL_DevAttr_t stCreateDevAttr;
-    MI_SCL_ChannelAttr_t stSclChnAttr;
-    MI_SCL_ChnParam_t stSclChnParam;
+    sstar_scl_info_t scl_info;
     MI_SCL_OutPortParam_t stSclOutputParam;
-    MI_SYS_ChnPort_t stChnPort;
-    Sys_BindInfo_T stBindInfo;
     int snr_index;
     snr_index = get_sensorgst_with_id(buf_obj->sensorIdx);
     if(snr_index == -1)
@@ -755,181 +680,78 @@ static MI_S32 sstar_init_scl(buffer_object_t *buf_obj)
         printf("get_sensorgst_with_id error \n");
         return -1;
     }
-
-    SclChnId = gstSensorAttr[snr_index].u32SclChnId;
-    SclDevId = gstSensorAttr[snr_index].u32SclDevId;
-    SclOutPortId = gstSensorAttr[snr_index].u32SclOutPortId;
-
-    memset(&stCreateDevAttr, 0x0, sizeof(MI_SCL_DevAttr_t));
-    stCreateDevAttr.u32NeedUseHWOutPortMask = gstSensorAttr[snr_index].u32HWOutPortMask;
-    if (MI_SCL_CreateDevice(SclDevId, &stCreateDevAttr)) {
-        printf("MI_SCL_CreateDevice error, SclDevId=%d\n",SclDevId);
-        return -1;
-    }
-    memset(&stSclChnAttr, 0x0, sizeof(MI_SCL_ChannelAttr_t));
-    if (MI_SCL_CreateChannel(SclDevId, SclChnId, &stSclChnAttr)) {
-        printf("MI_SCL_CreateChannel error \n");
-        return -1;
-    }
-
-    memset(&stSclChnParam, 0x0, sizeof(MI_SCL_ChnParam_t));
-    stSclChnParam.eRot = E_MI_SYS_ROTATE_NONE;
-    if (MI_SCL_SetChnParam(SclDevId, SclChnId, &stSclChnParam)) {
-        printf("MI_SCL_SetChnParam error \n");
-        return -1;
-    }
-
-    if (MI_SCL_StartChannel(SclDevId, SclChnId)) {
-        printf("MI_SCL_StartChannel error \n");
-        return -1;
-    }
-
-
-    memset(&stSclOutputParam, 0x0, sizeof(MI_SCL_OutPortParam_t));
-    MI_SCL_GetInputPortCrop(SclDevId, SclChnId, &stSclOutputParam.stSCLOutCropRect);
-    stSclOutputParam.stSCLOutCropRect.u16X = stSclOutputParam.stSCLOutCropRect.u16X;
-    stSclOutputParam.stSCLOutCropRect.u16Y = stSclOutputParam.stSCLOutCropRect.u16Y;
-    stSclOutputParam.stSCLOutCropRect.u16Width = stSclOutputParam.stSCLOutCropRect.u16Width;
-    stSclOutputParam.stSCLOutCropRect.u16Height = stSclOutputParam.stSCLOutCropRect.u16Height;
+    scl_info.scl_dev_id = gstSensorAttr[snr_index].u32SclDevId;
+    scl_info.scl_chn_id = gstSensorAttr[snr_index].u32SclChnId;
+    scl_info.scl_outport = gstSensorAttr[snr_index].u32SclOutPortId;
+    scl_info.scl_hw_outport_mask = gstSensorAttr[snr_index].u32HWOutPortMask;
+    scl_info.scl_rotate = E_MI_SYS_ROTATE_NONE;
 	if ((buf_obj->scl_rotate == E_MI_SYS_ROTATE_90) || (buf_obj->scl_rotate == E_MI_SYS_ROTATE_270))
     {    
-        stSclOutputParam.stSCLOutputSize.u16Width = ALIGN_BACK(buf_obj->vdec_info.v_out_height, ALIGN_NUM);
-        stSclOutputParam.stSCLOutputSize.u16Height = ALIGN_BACK(buf_obj->vdec_info.v_out_width, ALIGN_NUM);
+        scl_info.scl_out_width = ALIGN_BACK(buf_obj->vdec_info.v_out_height, ALIGN_NUM);
+        scl_info.scl_out_height = ALIGN_BACK(buf_obj->vdec_info.v_out_width, ALIGN_NUM);
     }else
     {
-        stSclOutputParam.stSCLOutputSize.u16Width = ALIGN_BACK(buf_obj->vdec_info.v_out_width, ALIGN_NUM);
-        stSclOutputParam.stSCLOutputSize.u16Height = ALIGN_BACK(buf_obj->vdec_info.v_out_height, ALIGN_NUM);
+        scl_info.scl_out_width = ALIGN_BACK(buf_obj->vdec_info.v_out_width, ALIGN_NUM);
+        scl_info.scl_out_height = ALIGN_BACK(buf_obj->vdec_info.v_out_height, ALIGN_NUM);
     }
-    printf("SCL%d Crop.Width=%d CropRect.Height=%d Out.Width=%d Out.Height=%d\n",SclDevId, stSclOutputParam.stSCLOutCropRect.u16Width, stSclOutputParam.stSCLOutCropRect.u16Height,
-        stSclOutputParam.stSCLOutputSize.u16Width, stSclOutputParam.stSCLOutputSize.u16Height);
-    stSclOutputParam.ePixelFormat = E_MI_SYS_PIXEL_FRAME_YUV_SEMIPLANAR_420;
-    stSclOutputParam.bMirror = 0;
-    stSclOutputParam.bFlip = 0;
-    stSclOutputParam.eCompressMode = E_MI_SYS_COMPRESS_MODE_NONE;
-    if (MI_SCL_SetOutputPortParam(SclDevId, SclChnId, SclOutPortId, &stSclOutputParam)) {
-        printf("MI_SCL_SetOutputPortParam error \n");
-        return -1;
-    }
-
-    stChnPort.eModId = E_MI_MODULE_ID_SCL;
-    stChnPort.u32DevId = SclDevId;
-    stChnPort.u32ChnId = SclChnId;
-    stChnPort.u32PortId = SclOutPortId;
-    if (MI_SYS_SetChnOutputPortDepth(0, &stChnPort, 0, 4)) {
-        printf("MI_SYS_SetChnOutputPortDepth error \n");
-        return -1;
-    }
-    printf("MI_SCL_EnableOutputPort,SclDevId=%d SclChnId=%d SclOutPortId=%d eIsp2SclType=%d\n",SclDevId,SclChnId,SclOutPortId,gstSensorAttr[snr_index].eIsp2SclType);
-    if (MI_SCL_EnableOutputPort(SclDevId, SclChnId, SclOutPortId)) {
-        printf("MI_SCL_EnableOutputPort error \n");
-        return -1;
-    }
-
-    memset(&stBindInfo, 0x0, sizeof(Sys_BindInfo_T));
-    stBindInfo.stSrcChnPort.eModId = E_MI_MODULE_ID_ISP;
-    stBindInfo.stSrcChnPort.u32DevId = gstSensorAttr[snr_index].u32IspDevId;
-    stBindInfo.stSrcChnPort.u32ChnId = gstSensorAttr[snr_index].u32IspChnId;
-    stBindInfo.stSrcChnPort.u32PortId = gstSensorAttr[snr_index].u32IspOutPortId;
-
-    stBindInfo.stDstChnPort.eModId = E_MI_MODULE_ID_SCL;
-    stBindInfo.stDstChnPort.u32DevId = SclDevId;
-    stBindInfo.stDstChnPort.u32ChnId = SclChnId;
-    stBindInfo.stDstChnPort.u32PortId = 0;
-    stBindInfo.u32SrcFrmrate = 60;
-    stBindInfo.u32DstFrmrate = 60;
-    stBindInfo.eBindType = gstSensorAttr[snr_index].eIsp2SclType;
-    ret = bind_port(&stBindInfo);
-    if (ret != 0) {
-        printf("bind isp and scl error\n");
-        return ret;
-    }
+    scl_info.scl_src_chn_port.eModId = E_MI_MODULE_ID_ISP;
+    scl_info.scl_src_chn_port.u32DevId = gstSensorAttr[snr_index].u32IspDevId;
+    scl_info.scl_src_chn_port.u32ChnId = gstSensorAttr[snr_index].u32IspChnId;
+    scl_info.scl_src_chn_port.u32PortId = gstSensorAttr[snr_index].u32IspOutPortId;
+    scl_info.scl_src_module_inited = 1;
+    scl_info.scl_src_fps = 60;
+    scl_info.scl_dst_fps = 60;
+    scl_info.scl_bind_type = gstSensorAttr[snr_index].eIsp2SclType;
+    ExecFunc(sstar_scl_init(&scl_info), MI_SUCCESS);
 
     if(buf_obj->face_detect)
     {
     	/************************************************
         Step5:  Init Scl for Algo with face detect
         *************************************************/
-    	SclOutPortId = 1;
+    	scl_info.scl_outport = 1;
     	memset(&stSclOutputParam, 0x0, sizeof(MI_SCL_OutPortParam_t));
     	stSclOutputParam.stSCLOutputSize.u16Width = 800;//g_stAlgoRes.width;
     	stSclOutputParam.stSCLOutputSize.u16Height = 480;//g_stAlgoRes.height;
-    	stSclOutputParam.ePixelFormat = E_MI_SYS_PIXEL_FRAME_ARGB8888;//g_eAlgoFormat;
+    	stSclOutputParam.ePixelFormat = E_MI_SYS_PIXEL_FRAME_YUV_SEMIPLANAR_420;//g_eAlgoFormat;
     	stSclOutputParam.bMirror = 0;
     	stSclOutputParam.bFlip = 0;
-    	ExecFunc(MI_SCL_SetOutputPortParam(SclDevId, SclChnId, SclOutPortId, &stSclOutputParam), MI_SUCCESS);
-        printf("MI_SCL_EnableOutputPort,SclDevId=%d SclChnId=%d SclOutPortId=%d \n",SclDevId,SclChnId,SclOutPortId);
-    	ExecFunc(MI_SCL_EnableOutputPort(SclDevId, SclChnId, SclOutPortId), MI_SUCCESS);
+    	ExecFunc(MI_SCL_SetOutputPortParam(scl_info.scl_dev_id, scl_info.scl_chn_id, scl_info.scl_outport, &stSclOutputParam), MI_SUCCESS);
+        printf("MI_SCL_EnableOutputPort,SclDevId=%d SclChnId=%d SclOutPortId=%d \n", scl_info.scl_dev_id, scl_info.scl_chn_id, scl_info.scl_outport);
+    	ExecFunc(MI_SCL_EnableOutputPort(scl_info.scl_dev_id, scl_info.scl_chn_id, scl_info.scl_outport), MI_SUCCESS);
 
     }
     #if 1
-    if (buf_obj->scl_rotate > E_MI_SYS_ROTATE_NONE)
+    if (buf_obj->scl_rotate > E_MI_SYS_ROTATE_NONE && snr_index == 0)
     {
         /************************************************
         Step6:  scl rotate
         *************************************************/
-        SclDevId = 7;
-        SclChnId = 0;
-        SclOutPortId = 0;
-        memset(&stCreateDevAttr, 0x0, sizeof(MI_SCL_DevAttr_t));
-        memset(&stSclChnAttr, 0x0, sizeof(MI_SCL_ChannelAttr_t));
-        memset(&stSclChnParam, 0x0, sizeof(MI_SCL_ChnParam_t));
-        stCreateDevAttr.u32NeedUseHWOutPortMask = E_MI_SCL_HWSCL1;
-        stSclChnParam.eRot = gstSensorAttr[snr_index].scl_eRot;
-        
-        ExecFunc(MI_SCL_CreateDevice(SclDevId, &stCreateDevAttr), MI_SUCCESS);
-        ExecFunc(MI_SCL_CreateChannel(SclDevId, SclChnId, &stSclChnAttr), MI_SUCCESS);
-        ExecFunc(MI_SCL_SetChnParam(SclDevId, SclChnId, &stSclChnParam), MI_SUCCESS);
-        ExecFunc(MI_SCL_StartChannel(SclDevId, SclChnId), MI_SUCCESS);
-        printf("scl chn start, (%d %d)", (int)SclDevId, (int)SclChnId);
-        memset(&stBindInfo, 0x0, sizeof(Sys_BindInfo_T));
-        stBindInfo.stSrcChnPort.eModId = E_MI_MODULE_ID_SCL;
-        stBindInfo.stSrcChnPort.u32DevId = gstSensorAttr[snr_index].u32SclDevId;
-        stBindInfo.stSrcChnPort.u32ChnId = gstSensorAttr[snr_index].u32SclChnId;
-        stBindInfo.stSrcChnPort.u32PortId = gstSensorAttr[snr_index].u32SclOutPortId;
-        stBindInfo.stDstChnPort.eModId = E_MI_MODULE_ID_SCL;
-        stBindInfo.stDstChnPort.u32DevId = SclDevId;
-        stBindInfo.stDstChnPort.u32ChnId = SclChnId;
-        stBindInfo.stDstChnPort.u32PortId = 0;
-        stBindInfo.u32SrcFrmrate = 60;
-        stBindInfo.u32DstFrmrate = 60;
-        stBindInfo.eBindType = E_MI_SYS_BIND_TYPE_FRAME_BASE;
-        ExecFunc(bind_port(&stBindInfo), MI_SUCCESS);
-        printf("bind SCL(%d %d %d)->SCL(%d %d),bind type:%d ", (int)gstSensorAttr[snr_index].u32SclDevId, (int)gstSensorAttr[snr_index].u32SclChnId,
-                (int)gstSensorAttr[snr_index].u32SclOutPortId, (int)SclDevId, (int)SclChnId, (int)stBindInfo.eBindType);
-        memset(&stSclOutputParam, 0x0, sizeof(MI_SCL_OutPortParam_t));     
-        ExecFunc(MI_SCL_GetInputPortCrop(SclDevId, SclChnId, &stSclOutputParam.stSCLOutCropRect), MI_SUCCESS);
-        printf("MI_SCL_GetInputPortCrop (%d, %d, %d, %d) \n",stSclOutputParam.stSCLOutCropRect.u16X,stSclOutputParam.stSCLOutCropRect.u16Y,
-            stSclOutputParam.stSCLOutCropRect.u16Width, stSclOutputParam.stSCLOutCropRect.u16Height);
-        stSclOutputParam.stSCLOutCropRect.u16X = 0;
-        stSclOutputParam.stSCLOutCropRect.u16Y = 0;
-        stSclOutputParam.stSCLOutCropRect.u16Width = 0;
-        stSclOutputParam.stSCLOutCropRect.u16Height = 0;
-        stSclOutputParam.stSCLOutputSize.u16Width = ALIGN_BACK(buf_obj->vdec_info.v_out_width, ALIGN_NUM);
-        stSclOutputParam.stSCLOutputSize.u16Height = ALIGN_BACK(buf_obj->vdec_info.v_out_height, ALIGN_NUM);
-        printf("SCL7 Crop.Width=%d CropRect.Height=%d Out.Width=%d Out.Height=%d\n",stSclOutputParam.stSCLOutCropRect.u16Width, stSclOutputParam.stSCLOutCropRect.u16Height,
-            stSclOutputParam.stSCLOutputSize.u16Width, stSclOutputParam.stSCLOutputSize.u16Height);  
-        stSclOutputParam.bFlip = FALSE;
-        stSclOutputParam.bMirror = FALSE;
-        stSclOutputParam.ePixelFormat = E_MI_SYS_PIXEL_FRAME_YUV_SEMIPLANAR_420;
-        ExecFunc(MI_SCL_SetOutputPortParam(SclDevId, SclChnId, SclOutPortId, &stSclOutputParam), MI_SUCCESS);
-        memset(&stChnPort, 0x0, sizeof(MI_SYS_ChnPort_t));
-        stChnPort.eModId = E_MI_MODULE_ID_SCL;
-        stChnPort.u32DevId = SclDevId;
-        stChnPort.u32ChnId = SclChnId;
-        stChnPort.u32PortId = SclOutPortId;
-        ExecFunc(MI_SYS_SetChnOutputPortDepth(0, &stChnPort, 0, 3), MI_SUCCESS);
-        ExecFunc(MI_SCL_EnableOutputPort(SclDevId, SclChnId, SclOutPortId), MI_SUCCESS);
+        scl_info.scl_dev_id = 7;
+        scl_info.scl_chn_id = 0;
+        scl_info.scl_outport = 0;
+        scl_info.scl_hw_outport_mask = E_MI_SCL_HWSCL1;
+        scl_info.scl_rotate = gstSensorAttr[snr_index].scl_eRot;
+        scl_info.scl_out_width = ALIGN_BACK(buf_obj->vdec_info.v_out_width, ALIGN_NUM);
+        scl_info.scl_out_height = ALIGN_BACK(buf_obj->vdec_info.v_out_height, ALIGN_NUM);
+        scl_info.scl_src_chn_port.eModId = E_MI_MODULE_ID_SCL;
+        scl_info.scl_src_chn_port.u32DevId = gstSensorAttr[snr_index].u32SclDevId;
+        scl_info.scl_src_chn_port.u32ChnId = gstSensorAttr[snr_index].u32SclChnId;
+        scl_info.scl_src_chn_port.u32PortId = gstSensorAttr[snr_index].u32SclOutPortId;
+        scl_info.scl_src_module_inited = 1;
+        scl_info.scl_src_fps = 60;
+        scl_info.scl_dst_fps = 60;
+        scl_info.scl_bind_type = E_MI_SYS_BIND_TYPE_FRAME_BASE;
+        ExecFunc(sstar_scl_init(&scl_info), MI_SUCCESS);        
     }
     #endif
     printf("MI Scl Init done \n");
     return 0;
 }
 
-static MI_S32 sstar_deinit_scl(buffer_object_t *buf_obj) {
+static MI_S32 sstar_scl_deinit_for_sensor(buffer_object_t *buf_obj) {
 
-    MI_SCL_DEV SclDevId;
-    MI_SCL_CHANNEL SclChnId;
-    MI_SCL_PORT SclOutPortId;
+    sstar_scl_info_t scl_info;
     Sys_BindInfo_T stBindInfo;
 
     int snr_index;
@@ -939,75 +761,45 @@ static MI_S32 sstar_deinit_scl(buffer_object_t *buf_obj) {
         printf("get_sensorgst_with_id error \n");
         return -1;
     }
-    SclDevId = gstSensorAttr[snr_index].u32SclDevId;
-    SclChnId = gstSensorAttr[snr_index].u32SclChnId;
-    SclOutPortId = gstSensorAttr[snr_index].u32SclOutPortId;
     #if 1
-    if(buf_obj->scl_rotate > E_MI_SYS_ROTATE_NONE)
+    if(buf_obj->scl_rotate > E_MI_SYS_ROTATE_NONE && snr_index == 0)
     {
-        memset(&stBindInfo, 0x0, sizeof(Sys_BindInfo_T));
-        stBindInfo.stSrcChnPort.eModId = E_MI_MODULE_ID_SCL;
-        stBindInfo.stSrcChnPort.u32DevId = SclDevId;
-        stBindInfo.stSrcChnPort.u32ChnId = SclChnId;
-        stBindInfo.stSrcChnPort.u32PortId = SclOutPortId;
-
-        stBindInfo.stDstChnPort.eModId = E_MI_MODULE_ID_SCL;
-        stBindInfo.stDstChnPort.u32DevId = 7;
-        stBindInfo.stDstChnPort.u32ChnId = 0;
-        stBindInfo.stDstChnPort.u32PortId = 0;
-        stBindInfo.u32SrcFrmrate = 60;
-        stBindInfo.u32DstFrmrate = 60;
-        stBindInfo.eBindType = E_MI_SYS_BIND_TYPE_FRAME_BASE;
-        ExecFunc(unbind_port(&stBindInfo), MI_SUCCESS);    
-
-        ExecFunc(MI_SCL_DisableOutputPort(7, 0, 0), MI_SUCCESS);
-        ExecFunc(MI_SCL_StopChannel(7, 0), MI_SUCCESS);
-        ExecFunc(MI_SCL_DestroyChannel(7, 0), MI_SUCCESS);
-        ExecFunc(MI_SCL_DestroyDevice(7), MI_SUCCESS);
-
+        scl_info.scl_dev_id = 7;
+        scl_info.scl_chn_id = 0;
+        scl_info.scl_outport = 0;
+        scl_info.scl_src_chn_port.eModId = E_MI_MODULE_ID_SCL;
+        scl_info.scl_src_module_inited = 1;
+        scl_info.scl_src_chn_port.u32DevId = gstSensorAttr[snr_index].u32SclDevId;
+        scl_info.scl_src_chn_port.u32ChnId = gstSensorAttr[snr_index].u32SclChnId;
+        scl_info.scl_src_chn_port.u32PortId = gstSensorAttr[snr_index].u32SclOutPortId;
+        scl_info.scl_src_fps = 60;
+        scl_info.scl_dst_fps = 60;
+        scl_info.scl_bind_type = E_MI_SYS_BIND_TYPE_FRAME_BASE;
+        ExecFunc(sstar_scl_deinit(&scl_info), MI_SUCCESS);
     }
     #endif
-    memset(&stBindInfo, 0x0, sizeof(Sys_BindInfo_T));
-    stBindInfo.stSrcChnPort.eModId = E_MI_MODULE_ID_ISP;
-    stBindInfo.stSrcChnPort.u32DevId = gstSensorAttr[snr_index].u32IspDevId;
-    stBindInfo.stSrcChnPort.u32ChnId = gstSensorAttr[snr_index].u32IspChnId;
-    stBindInfo.stSrcChnPort.u32PortId = gstSensorAttr[snr_index].u32IspOutPortId;
 
-    stBindInfo.stDstChnPort.eModId = E_MI_MODULE_ID_SCL;
-    stBindInfo.stDstChnPort.u32DevId = SclDevId;
-    stBindInfo.stDstChnPort.u32ChnId = SclChnId;
-    stBindInfo.stDstChnPort.u32PortId = 0;
-    stBindInfo.u32SrcFrmrate = 60;
-    stBindInfo.u32DstFrmrate = 60;
-    unbind_port(&stBindInfo);
-    if (MI_SCL_DisableOutputPort(SclDevId, SclChnId, SclOutPortId)) {
-        printf("MI_SCL_DisableOutputPort error,SclChnId=%d SclOutPortId=%d \n",SclChnId,SclOutPortId);
-        return -1;
-    }
+    scl_info.scl_dev_id = gstSensorAttr[snr_index].u32SclDevId;
+    scl_info.scl_chn_id = gstSensorAttr[snr_index].u32SclChnId;
+    scl_info.scl_src_chn_port.eModId = E_MI_MODULE_ID_ISP;
+    scl_info.scl_src_module_inited = 1; 
+    scl_info.scl_src_chn_port.u32DevId = gstSensorAttr[snr_index].u32IspDevId;
+    scl_info.scl_src_chn_port.u32ChnId = gstSensorAttr[snr_index].u32IspChnId;
+    scl_info.scl_src_chn_port.u32PortId = gstSensorAttr[snr_index].u32IspOutPortId;
+    scl_info.scl_src_fps = 60;
+    scl_info.scl_dst_fps = 60;
+    scl_info.scl_bind_type =  gstSensorAttr[snr_index].eIsp2SclType;
 
     if(buf_obj->face_detect)
     {
-        SclOutPortId = 1;
-        if (MI_SCL_DisableOutputPort(SclDevId, SclChnId, SclOutPortId)) {
-            printf("MI_SCL_DisableOutputPort error,SclChnId=%d SclOutPortId=%d \n",SclChnId,SclOutPortId);
+       scl_info.scl_outport = 1;
+        if (MI_SCL_DisableOutputPort(scl_info.scl_dev_id, scl_info.scl_chn_id, scl_info.scl_outport)) {
+            printf("MI_SCL_DisableOutputPort error,SclChnId=%d SclOutPortId=%d \n", scl_info.scl_chn_id, scl_info.scl_outport);
             return -1;
         }
     }
-
-    if (MI_SCL_StopChannel(SclDevId, SclChnId)) {
-        printf("MI_SCL_StopChannel error \n \n");
-        return -1;
-    }
-
-    if (MI_SCL_DestroyChannel(SclDevId, SclChnId)) {
-        printf("MI_SCL_DestroyChannel error \n");
-        return -1;
-    }
-
-    if (MI_SCL_DestroyDevice(SclDevId)) {
-        printf("MI_SCL_DestroyDevice error \n");
-        return -1;
-    }
+    scl_info.scl_outport = gstSensorAttr[snr_index].u32SclOutPortId;
+    ExecFunc(sstar_scl_deinit(&scl_info), MI_SUCCESS);
     printf("MI_SCL_DestroyDevice ok \n");
     return 0;
 }
@@ -1022,14 +814,14 @@ int create_snr_pipeline(buffer_object_t *buf_obj) {
 	Hdr = buf_obj->Hdr_Used;
     //printf("create_snr_pipeline eSensorPadID=%d\n",sensorIdx);
     ret = sstar_init_snr(sensorIdx, Hdr) || sstar_init_vif(sensorIdx, Hdr) ||
-          sstar_init_isp(sensorIdx, buf_obj->iq_file, Hdr) || sstar_init_scl(buf_obj);
+          sstar_init_isp(sensorIdx, buf_obj->iq_file, Hdr) || sstar_scl_init_for_sensor(buf_obj);
     if (ret != 0) {
         printf("create sensor pipeline fail,sensorIdx=%d \n",sensorIdx);
         return ret;
     }
     if(buf_obj->venc_flag != 0)
     {
-        sstar_init_venc(buf_obj);
+        sstar_venc_init_for_sensor(buf_obj);
     }
     return 0;
 }
@@ -1041,9 +833,9 @@ int destroy_snr_pipeline(buffer_object_t *buf_obj)
 
     if(buf_obj->venc_flag != 0)
     {
-        sstar_deinit_venc(buf_obj);
+        sstar_venc_deinit_for_sensor(buf_obj);
     }
-    ret = sstar_deinit_scl(buf_obj) || sstar_deinit_isp(sensorIdx) ||
+    ret = sstar_scl_deinit_for_sensor(buf_obj) || sstar_deinit_isp(sensorIdx) ||
           sstar_deinit_vif(sensorIdx) || sstar_deinit_snr(sensorIdx);
     if (ret != 0) {
         printf("destroy sensor pipeline fail \n");
@@ -1127,7 +919,7 @@ void init_sensor_attr(buffer_object_t *buf_obj, int eSnr_Num)//MI_SNR_PADID eSnr
         if(snr_index == 0)
 		    gstSensorAttr[snr_index].u32SclDevId = 1;
         else
-		    gstSensorAttr[snr_index].u32SclDevId = 3; 
+		    gstSensorAttr[snr_index].u32SclDevId = 3;   
 		gstSensorAttr[snr_index].u32SclChnId = 0;
     	gstSensorAttr[snr_index].u32SclOutPortId = 0;
     	if(snr_index == 0)

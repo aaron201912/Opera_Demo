@@ -50,6 +50,7 @@ void frame_queue_putbuf(frame_queue_t *f,char *frame,int buf_len, void* handle);
 void frame_queue_push(frame_queue_t *f);
 frame_t *frame_queue_peek_last(frame_queue_t *f,int wait_ms);
 void frame_queue_next(frame_queue_t *f,frame_t* pFrame);
+void frame_queue_peek_end(frame_queue_t *f);
 void frame_queue_flush(frame_queue_t *f);
 void frame_queue_destory(frame_queue_t *f);
 

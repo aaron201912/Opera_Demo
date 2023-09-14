@@ -4,17 +4,11 @@
 #include "st_rgn.h"
 #include "sstar_algo.h"
 
-#define SENSOR_DRM
-#ifdef SENSOR_DRM
 #define BUF_NUM 1
-#endif
 
 buffer_object_t _g_buf_obj[BUF_NUM];
-/*****************************************************************************
- Sensor + Drm + Rgn + Algo case
-******************************************************************************/
-#ifdef SENSOR_DRM
-int _g_snr_num = 2;
+
+int _g_snr_num = 1;
 int _g_drm_flag = 0;
 int _g_dev_fd = 0;
 
@@ -62,7 +56,12 @@ int parse_arg(int argc, char **argv)
                     _g_buf_obj[0].connector_type = DRM_MODE_CONNECTOR_DPI;
 				} else if (!strcmp(connector_name, "mipi") || !strcmp(connector_name, "Mipi") || !strcmp(connector_name, "MIPI")) {
 				    _g_buf_obj[0].connector_type = DRM_MODE_CONNECTOR_DSI;
-				} else {
+				} else if (!strcmp(connector_name, "lvds") || !strcmp(connector_name, "Lvds") || !strcmp(connector_name, "LVDS")) {
+				    _g_buf_obj[0].connector_type = DRM_MODE_CONNECTOR_LVDS;
+				} else if (!strcmp(connector_name, "hdmi") || !strcmp(connector_name, "hdmi") || !strcmp(connector_name, "hdmi")) {
+				    _g_buf_obj[0].connector_type = DRM_MODE_CONNECTOR_HDMIA;
+				}
+                else {
 				   display_help();
 				   return DRM_FAIL;
 				}
@@ -121,6 +120,7 @@ int parse_arg(int argc, char **argv)
 
 void  int_buf_obj(int i)
 {
+    _g_buf_obj[i].format = 0;
     _g_buf_obj[i].vdec_info.format = DRM_FORMAT_NV12;
     _g_buf_obj[i].Hdr_Used = 0;
     if(_g_drm_flag == 0)
@@ -134,6 +134,10 @@ void  int_buf_obj(int i)
         _g_buf_obj[i].fd = _g_dev_fd;
         _g_drm_flag = 1;
         printf("sstar_drm_open success!\n");
+    }
+    else
+    {
+        _g_buf_obj[i].fd = _g_dev_fd;
     }
     _g_buf_obj[i].face_detect = 1;
     _g_buf_obj[i].vdec_info.plane_type = MOPS;
@@ -195,31 +199,31 @@ int main(int argc, char **argv)
         sstar_drm_init(&_g_buf_obj[i]);
         creat_dmabuf_queue(&_g_buf_obj[i]);
         init_sensor_attr(&_g_buf_obj[i], _g_snr_num);
-        create_snr_pipeline(&_g_buf_obj[i]);
         if(get_sensor_attr(_g_buf_obj[i].sensorIdx, &SensorAttr))
         {
             printf("get_sensor_attr fail \n");
             return -1;
         }
-        if((_g_buf_obj[i].scl_rotate == E_MI_SYS_ROTATE_90) || (_g_buf_obj[i].scl_rotate == E_MI_SYS_ROTATE_270))
+        if(_g_buf_obj[i].scl_rotate > E_MI_SYS_ROTATE_NONE)
         {
             _g_buf_obj[i].chn_port_info.eModId = E_MI_MODULE_ID_SCL;
             _g_buf_obj[i].chn_port_info.u32DevId = 7;
             _g_buf_obj[i].chn_port_info.u32ChnId = 0;
-            _g_buf_obj[i].chn_port_info.u32PortId = 0;       
-        }else
+            _g_buf_obj[i].chn_port_info.u32PortId = 0;
+        } else
         {
             _g_buf_obj[i].chn_port_info.eModId = E_MI_MODULE_ID_SCL;
             _g_buf_obj[i].chn_port_info.u32DevId = SensorAttr.u32SclDevId;
             _g_buf_obj[i].chn_port_info.u32ChnId = SensorAttr.u32SclChnId;
             _g_buf_obj[i].chn_port_info.u32PortId = SensorAttr.u32SclOutPortId;
         }
-        _g_buf_obj[i].rgn_chn_port_info.eModId = E_MI_MODULE_ID_SCL;
-        _g_buf_obj[i].rgn_chn_port_info.u32DevId = SensorAttr.u32SclDevId;
-        _g_buf_obj[i].rgn_chn_port_info.u32ChnId = SensorAttr.u32SclChnId;
-        _g_buf_obj[i].rgn_chn_port_info.u32PortId = SensorAttr.u32SclOutPortId;    
+        create_snr_pipeline(&_g_buf_obj[i]);
         if(_g_buf_obj[i].face_detect != 0)
-        {            
+        {
+            _g_buf_obj[i].rgn_chn_port_info.eModId = E_MI_MODULE_ID_SCL;
+            _g_buf_obj[i].rgn_chn_port_info.u32DevId = SensorAttr.u32SclDevId;
+            _g_buf_obj[i].rgn_chn_port_info.u32ChnId = SensorAttr.u32SclChnId;
+            _g_buf_obj[i].rgn_chn_port_info.u32PortId = SensorAttr.u32SclOutPortId;          
             sstar_init_rgn(&_g_buf_obj[i]);
             sstar_algo_init(&_g_buf_obj[i]);
         }
@@ -268,5 +272,4 @@ int main(int argc, char **argv)
     MI_SYS_Exit(0);
 	return 0;
 }
-#endif
 
