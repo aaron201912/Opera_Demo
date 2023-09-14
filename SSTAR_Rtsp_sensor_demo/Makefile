@@ -1,9 +1,6 @@
 #TOOLCHAIN_VERSION=10.2.1
 TOOLCHAIN_VERSION ?=6.4.0
 CHIP ?=SSD2386
-ENABLE_LDC=0
-ENABLE_RTSP ?=0
-ENABLE_DRM ?=0
 
 CC  = $(CROSS_COMPILE)gcc
 CPP = $(CROSS_COMPILE)g++
@@ -28,7 +25,7 @@ INCLUDES  += -I./rtsp/live555/liveMedia/include
 INCLUDES  += -I./rtsp/live555/BasicUsageEnvironment/include
 INCLUDES  += -I./rtsp/live555/mediaServer/include
 
-TARGET_NAME  := Sensor_rtsp_demo
+TARGET_NAME  := Rtsp_sensor_demo
 
 CPP_SRCS := $(foreach dir,$(dirs),$(wildcard $(dir)/*.cpp))
 CPP_OBJS := $(foreach n,$(CPP_SRCS),$(addsuffix .cpp.o,$(basename ${n})))
@@ -61,16 +58,6 @@ CPP_FLAGS += -DCHIP_IS_SSU9383
 else ifeq  ($(CHIP),SSD2381)
 C_FLAGS += -DCHIP_IS_SSD2381
 CPP_FLAGS += -DCHIP_IS_SSD2381
-endif
-
-ifeq ($(ENABLE_RTSP),1)
-C_FLAGS += -DRTSP_ENABLE
-CPP_FLAGS += -DRTSP_ENABLE
-endif
-
-ifeq ($(ENABLE_DRM),1)
-C_FLAGS += -DDRM_ENABLE
-CPP_FLAGS += -DDRM_ENABLE
 endif
 
 LIB_PATH  += -L$(ALKAID_PATH)/project/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/mi_libs/dynamic
@@ -111,8 +98,8 @@ $(TARGET_NAME): $(CPP_OBJS) $(CPP_SRCS) $(C_OBJS) $(C_SRCS)
 
 %.c.o : %.c
 	@echo "compile $@"
-	@$(CC) -DENABLE_HDMI=$(ENABLE_HDMI)  $(C_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@
+	@$(CC) $(C_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@
 
 %.cpp.o : %.cpp
 	@echo "compile $@"
-	@$(CPP) -DENABLE_HDMI=$(ENABLE_HDMI)  $(CPP_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@
+	@$(CPP) $(CPP_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@

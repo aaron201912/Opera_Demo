@@ -1,9 +1,4 @@
-﻿Demo说明：
-	本Demo主要针对的是DRM架构的使用介绍
-
-	需要SDK支持DRM && Dma_heap
-
-一、编译说明：
+﻿一、编译说明：
 	a.修改makefile中的编译链为系统对应编译链
 	
     b.如果将demo放到跟project同级目录   （默认方式）
@@ -14,27 +9,25 @@
     --> make clean; make TOOLCHAIN_VERSION=6.4.0 OR make clean; make TOOLCHAIN_VERSION=10.2.1
 
 二、生成bin文件：
-    --> out/Drm_sensor_demo
+    --> out/Rtsp_sensor_demo 
 
 三、Demo运行参数说明
 
 ************************* usage *************************
-
--s: [0/1/2]选择sensorpadid,SSU9383只支持选0/2, SSU9386只支持选0/1（默认是0）
--i：指定需要load得iqxx.bin,只作用于第一路pipline
--I：指定需要load得iqxx.bin,只作用于第二路pipline
--r：选择是否需要旋转（1/2/3分别对应是90/180/270度旋转）,只作用于第一路pipline
--m：指定人形检测的算法模型路径,只作用于第一路pipline
--n：[1/2]选择单路播放还是pip双sensor（默认单路）
--a：[0/1]选择是否打开人形检查,只作用于第一路pipline(默认关闭)
--h: [0/1]是否开启HDR功能，只作用于第一路pipline
--c: 指定需要显示的屏接口类型，需要提前配置好屏参否则会Segmentation fault
+-s : [0/1/2]select sensor pad when chose single sensor
+-i : chose iqbin path for the fisrt pipeline
+-I : chose iqbin path for the second pipeline
+-n : [1:2]enable multi sensor and select pipeline
+-m : chose detect model path for the fisrt pipeline
+-a : enable face detect funtion for the fisrt pipeline
+-r : set rotate mode,default value is 0. [0,1,2,3] = [0,90,180,270]
+-h : [0/1]enable hdr
 
 eg:
-	单路sensor，从sensor_pad 0出流, 支持人型检测：
-	./Drm_sensor_demo -s 0 -c ttl -i /customer/xxx.bin -m/module_path -a 1 -r 2
+	单路sensor，从sensor_pad 0出流, isp旋转180度，支持人型检测：
+	./Rtsp_sensor_demo -s 0 -i /customer/xxx.bin -r 2 -m /module_path -a 1
 	
 	双Sensor PIP,主路支持人型检测
-    ./Drm_sensor_demo -n 2 -c ttl -i /customer/xxx.bin -I /customer/xxx.bin -m/module_path -a 1 -r 2
+    	./Rtsp_sensor_demo -n 2 -i /customer/xxx.bin -I /customer/xxx.bin -m/module_path -a 1 
 
 

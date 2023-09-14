@@ -15,14 +15,14 @@ buffer_object_t _g_buf_obj[BUF_NUM];
 void display_help(void)
 {
     printf("************************* usage *************************\n");
-    printf("-s : [0/1]select sensor pad when chose single sensor\n");
+    printf("-s : [0/1/2]select sensor pad when chose single sensor\n");
     printf("-i : chose iqbin path for the fisrt pipeline\n");
     printf("-I : chose iqbin path for the second pipeline\n");
     printf("-n : [1:2]enable multi sensor and select pipeline\n");
     printf("-m : chose detect model path for the fisrt pipeline\n");
     printf("-a : enable face detect funtion for the fisrt pipeline\n");
     printf("-r : set rotate mode,default value is 0. [0,1,2,3] = [0,90,180,270]\n");
-    printf("-h : [0/1]enable hdr\n");    
+    printf("-H : [0/1]enable hdr\n");    
     printf("eg:./Drm_sensor -s 0 -i /customer/iq.bin\n");
     return;
 }
@@ -35,15 +35,19 @@ int parse_args(int argc, char **argv)
 	int venc_flag;
 	char connector_name[20] = {0};
     struct option long_options[] = {
+            {"iqbin0", required_argument, NULL, 'i'},
+            {"iqbin1", required_argument, NULL, 'I'},
             {"model", required_argument, NULL, 'm'},
-            {"vpath", required_argument, NULL, 'V'},
-            {"apath", required_argument, NULL, 'a'},
-            {"hdmi", no_argument, NULL, 'M'},
+            {"sensorId", required_argument, NULL, 's'},
+            {"sensorNum", required_argument, NULL, 'n'},
+            {"faceDet", required_argument, NULL, 'a'},
+            {"rotate", required_argument, NULL, 'r'},
+            {"HDR", required_argument, NULL, 'H'},
             {"help", no_argument, NULL, 'h'},
             {0, 0, 0, 0}
     };
 
-    while ((s32Opt = getopt_long(argc, argv, "X:Y:W:H:Y:R:n:m:c:a:s:i:I:r:h:g:d:y:v:",long_options, &option_index))!= -1 )
+    while ((s32Opt = getopt_long(argc, argv, "i:I:m:s:n:a:r:H:",long_options, &option_index))!= -1 )
     {
         switch(s32Opt)
         {
@@ -106,9 +110,10 @@ int parse_args(int argc, char **argv)
                 _g_buf_obj[0].isp_rotate = atoi(optarg);
                 break;
             }
-            case 'h':
+            case 'H':
 				_g_buf_obj[0].Hdr_Used = atoi(optarg);
 				break;
+            case 'h':
             default:
             {
                 display_help();
