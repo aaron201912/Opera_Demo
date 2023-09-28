@@ -159,9 +159,6 @@ typedef enum {
     USECASE_PLAYBACK,
     USECASE_CAPTURE,
     USECASE_PASSTHROUGH,
-    USECASE_PASSTHROUGH_PLAYBACK,
-    USECASE_AEC,
-    USECASE_COMPRESS,
 } USECASE_TYPE_E;
 
 //-------------------------------------------------------------------------------------------------
@@ -222,6 +219,7 @@ struct cmd
     unsigned int in_channels;
     unsigned int in_rate;
     unsigned int in_times;
+    unsigned int in_volume;
 
     // for ao
     char *out_file_name;
@@ -231,6 +229,7 @@ struct cmd
     unsigned int out_channels;
     unsigned int out_rate;
     unsigned int out_times;
+    unsigned int out_volume;
 
     // for passthrough
     unsigned int pt_in_out_channels;
@@ -264,6 +263,13 @@ struct ctx
     struct chunk_fmt        chunk_fmt;
     unsigned int out_frame_total_size;
 };
+
+typedef enum
+{
+    PACKBACK = 0,
+    CAPTURE  = 1,
+    INVALID  = 127,
+} E_VOLUME_TYPE;
 
 //-------------------------------------------------------------------------------------------------
 //  Global Variables
@@ -319,6 +325,63 @@ struct ctx
 
 //     }
 // }
+
+int set_volume(E_VOLUME_TYPE volume_type, const char* mix_name, unsigned int card_id, long outvol)
+{
+    
+    snd_mixer_t* handle;
+    snd_mixer_elem_t* elem;
+    snd_mixer_selem_id_t* sid;
+    char card[64] = "default";
+    sprintf(card, "hw:%i", card_id);
+    if(outvol < 0 || outvol > 100)
+    {
+        printf("volume adjust range 0 ~ 100\n\r");
+        return - 1;
+    }
+    outvol = outvol * 1023 / 100;
+
+    snd_mixer_selem_id_alloca(&sid);
+    //sets simple-mixer index and name
+    //snd_mixer_selem_id_set_index(sid, 0);
+    snd_mixer_selem_id_set_name(sid, mix_name);
+
+    if ((snd_mixer_open(&handle, 0)) < 0){
+        return -1;
+    }
+    if ((snd_mixer_attach(handle, card)) < 0) {
+        snd_mixer_close(handle);
+        return -2;
+    }
+    if ((snd_mixer_selem_register(handle, NULL, NULL)) < 0) {
+        snd_mixer_close(handle);
+        return -3;
+    }
+    if (snd_mixer_load(handle) < 0) {
+        snd_mixer_close(handle);
+        return -4;
+    }
+    elem = snd_mixer_find_selem(handle, sid);
+    if (!elem) {
+        snd_mixer_close(handle);
+        return -5;
+    }
+    if(volume_type == PACKBACK){
+        if(snd_mixer_selem_set_playback_volume(elem, 0, outvol) < 0) {
+            snd_mixer_close(handle);
+            return -8;
+        }
+    }else if(volume_type == CAPTURE){
+        if(snd_mixer_selem_set_capture_volume(elem, 0, outvol) < 0) {
+            snd_mixer_close(handle);
+            return -9;
+        }        
+    }
+
+    printf("set volume\n\r");
+    snd_mixer_close(handle);
+    return 0;
+}
 
 static int aio_open(struct ctx *ctx, snd_pcm_stream_t stream, unsigned int card_id, unsigned int device_id, unsigned int channels_param, unsigned int rate_param, unsigned int dma_rate_param)
 {
@@ -950,9 +1013,6 @@ void help()
     printf("<playback>                                      <dac/echo_tx/spdif/i2s_a/i2s_b>\n");
     printf("<capture>                                       <adc_a/adc_b/dmic/echo_rx/hdmi_rx/i2s_a/i2s_b>\n");
     printf("<passthrough>                                   <adc_a-spdif/adc_a-dac>\n");
-    printf("<passthrough_playback>                          <>\n");
-    printf("<aec>                                           <spdif-adc_a-echo/dac-adc_a-echo>\n");
-    printf("<compress>                                      <>\n");
     printf("options:\n");
     printf("-A | --card <capture card number>               The card to capture audio\n");
     printf("-a | --card <playback card number>              The card to playback audio\n");
@@ -966,6 +1026,8 @@ void help()
     printf("-f | --file <playback file>                     The file name to playback audio\n");
     printf("-T | --time <capture time>                      The time to capture audio\n");
     printf("-t | --time <playback time>                     The time to playback audio\n");
+    printf("-V | --volume <capture volume>                  The volume to capture audio\n");
+    printf("-v | --volume <playback volume>                 The volume to playback audio\n");
     return;
 }
 
@@ -1014,6 +1076,7 @@ void cmd_init(struct cmd *cmd)
     cmd->in_channels  = 0;
     cmd->in_rate      = 0;
     cmd->in_times     = 0;
+    cmd->in_volume    = 50;
 
     cmd->out_file_name = NULL;
     cmd->out_file_type = NULL;
@@ -1022,6 +1085,7 @@ void cmd_init(struct cmd *cmd)
     cmd->out_channels  = 0;
     cmd->out_rate      = 0;
     cmd->out_times     = 0;
+    cmd->out_volume    = 50;
 
     cmd->pt_in_out_channels = 0;
     cmd->pt_in_rate = 0;
@@ -1095,19 +1159,6 @@ static int sample_ctx_deinit(struct ctx *ctx, struct cmd *cmd)
         passthrough_ai_adc_a_enable(cmd->in_card_id, false);
         passthrough_ao_dac_enable(cmd->out_card_id, false);
     }
-    // for aec
-    else if (strcasecmp(cmd->interface, "spdif-adc_a-echo") == 0)
-    {
-        aec_ai_adc_a_echo_enable(cmd->in_card_id, false);
-        ao_spdif_enable(cmd->out_card_id, false, true);
-        ao_echo_enable(cmd->out_card_id, false);
-    }
-    else if (strcasecmp(cmd->interface, "dac-adc_a-echo") == 0)
-    {
-        aec_ai_adc_a_echo_enable(cmd->in_card_id, false);
-        ao_dac_enable(cmd->out_card_id, false);
-        ao_echo_enable(cmd->out_card_id, false);
-    }
     else
     {
         PrintErr("error interface (%s)\n", cmd->interface);
@@ -1136,27 +1187,7 @@ static int sample_ctx_deinit(struct ctx *ctx, struct cmd *cmd)
             fclose(ctx->out_file);
         }
     }
-    else if(cmd->usecase_type == USECASE_AEC)
-    {
-        if (cmd->in_file_type != NULL && strcmp(cmd->in_file_type, "wav") == 0)
-        {
-            /* write header now all information is known */
-            ctx->header.data_sz = ctx->capture_frames * ctx->header.block_align;
-            ctx->header.riff_sz = ctx->header.data_sz + sizeof(ctx->header) - 8;
-            fseek(ctx->in_file, 0, SEEK_SET);
-            fwrite(&ctx->header, sizeof(struct wav_header), 1, ctx->in_file);
-        }
 
-        if (ctx->in_file != NULL)
-        {
-            fclose(ctx->in_file);
-        }
-
-        if (ctx->out_file != NULL)
-        {
-            fclose(ctx->out_file);
-        }
-    }
     FUNC_EXIT();
     return ret;
 }
@@ -1174,7 +1205,7 @@ static int sample_deinit(struct ctx *ctx, struct cmd *cmd)
     else if(cmd->usecase_type == USECASE_CAPTURE){
         snd_pcm_close(ctx->in_pcm);
     }
-    else if(cmd->usecase_type == USECASE_PASSTHROUGH || cmd->usecase_type == USECASE_AEC) {
+    else if(cmd->usecase_type == USECASE_PASSTHROUGH) {
         snd_pcm_close(ctx->in_pcm);
         snd_pcm_close(ctx->out_pcm);
     }
@@ -1197,13 +1228,6 @@ static int sample_ctx_init(struct ctx *ctx, struct cmd *cmd)
     if(cmd->usecase_type == USECASE_PLAYBACK)
     {
         need_playback = true;
-    }
-    if(cmd->usecase_type == USECASE_AEC)
-    {
-        need_capture = true;
-        need_playback = true;
-        // nedd add echo 2 channels
-        cmd->in_channels += 2;
     }
 
     if(need_capture || need_playback)
@@ -1381,11 +1405,6 @@ static int sample_ctx_init(struct ctx *ctx, struct cmd *cmd)
         ret = DEMO_FAIL;
     }
 
-    if(cmd->usecase_type == USECASE_AEC && (cmd->in_channels == 2 || cmd->in_rate == 0 || cmd->out_channels == 0 || cmd->out_rate == 0)){
-        PrintErr("Error aec param !\n");
-        ret = DEMO_FAIL;
-    }
-
     if(cmd->in_card_id > (CARD_NUM-1) || cmd->in_device_id > (DEVICE_NUM-1) ||
         cmd->out_card_id > (CARD_NUM-1) || cmd->out_device_id > (DEVICE_NUM-1)){
         PrintErr("Error device/card param !\n");
@@ -1405,76 +1424,106 @@ static int sample_init(struct ctx *ctx, struct cmd *cmd)
     if(strcasecmp(cmd->interface, "adc_a") == 0)
     {
         ai_adc_a_enable(cmd->in_card_id, true);
+        set_volume(CAPTURE, "ADC_A_0", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "ADC_A_1", cmd->in_card_id, cmd->in_volume);
     } 
     else if (strcasecmp(cmd->interface, "adc_b") == 0)
     {
         ai_adc_b_enable(cmd->in_card_id, true);
+        set_volume(CAPTURE, "ADC_B_0", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "ADC_B_1", cmd->in_card_id, cmd->in_volume);    
     }
     else if (strcasecmp(cmd->interface, "dmic") == 0)
     {
         ai_dmic_enable(cmd->in_card_id, true, cmd->in_channels);
+        set_volume(CAPTURE, "DMIC_0", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "DMIC_1", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "DMIC_2", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "DMIC_3", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "DMIC_4", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "DMIC_5", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "DMIC_6", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "DMIC_7", cmd->in_card_id, cmd->in_volume);
     }
     else if (strcasecmp(cmd->interface, "echo_rx") == 0)
     {
         ai_echo_enable(cmd->in_card_id, true);
+        set_volume(CAPTURE, "ECHO", cmd->in_card_id, cmd->in_volume);
     }
     else if (strcasecmp(cmd->interface, "hdmi_rx") == 0)
     {
         ai_hdmi_enable(cmd->in_card_id, true);
+        set_volume(CAPTURE, "HDMI_RX_0", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "HDMI_RX_1", cmd->in_card_id, cmd->in_volume);
     }
     else if (strcasecmp(cmd->interface, "i2s_a") == 0)
     {
         ai_i2s_a_enable(cmd->in_card_id, true, cmd->in_channels);
+        set_volume(CAPTURE, "I2S_RXA_0", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "I2S_RXA_1", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "I2S_RXA_2", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "I2S_RXA_3", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "I2S_RXA_4", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "I2S_RXA_5", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "I2S_RXA_6", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "I2S_RXA_7", cmd->in_card_id, cmd->in_volume);
     }
     else if (strcasecmp(cmd->interface, "i2s_b") == 0)
     {
         ai_i2s_b_enable(cmd->in_card_id, true);
+        set_volume(CAPTURE, "I2S_RXB_0", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "I2S_RXB_1", cmd->in_card_id, cmd->in_volume); 
     }
     // for ao
     else if (strcasecmp(cmd->interface, "dac") == 0)
     {
         ao_dac_enable(cmd->out_card_id, true);
+        set_volume(PACKBACK, "DAC_0", cmd->in_card_id, cmd->out_volume);
+        set_volume(PACKBACK, "DAC_1", cmd->in_card_id, cmd->out_volume);
     }
     else if (strcasecmp(cmd->interface, "echo_tx") == 0)
     {
         ao_echo_enable(cmd->out_card_id, true);
+        set_volume(PACKBACK, "SIDETONE", cmd->in_card_id, cmd->out_volume);
     }
     else if (strcasecmp(cmd->interface, "spdif") == 0)
     {
         ao_spdif_enable(cmd->out_card_id, true, true);
+        set_volume(PACKBACK, "SPDIF_TX_0", cmd->in_card_id, cmd->out_volume);
+        set_volume(PACKBACK, "SPDIF_TX_1", cmd->in_card_id, cmd->out_volume);
     }
     else if (strcasecmp(cmd->interface, "i2s_a") == 0)
     {
         ao_i2s_a_enable(cmd->out_card_id, true);
+        set_volume(PACKBACK, "I2S_TXA_0", cmd->in_card_id, cmd->out_volume);
+        set_volume(PACKBACK, "I2S_TXA_1", cmd->in_card_id, cmd->out_volume);     
     }
     else if (strcasecmp(cmd->interface, "i2s_b") == 0)
     {
         ao_i2s_b_enable(cmd->out_card_id, true);
+        set_volume(PACKBACK, "I2S_TXB_0", cmd->in_card_id, cmd->out_volume);
+        set_volume(PACKBACK, "I2S_TXB_1", cmd->in_card_id, cmd->out_volume);
     }
     // for passthrough
     else if (strcasecmp(cmd->interface, "adc_a-spdif") == 0)
     {
         passthrough_ai_adc_a_enable(cmd->in_card_id, true);
         passthrough_ao_spdif_enable(cmd->out_card_id, true, true);
+        set_volume(CAPTURE, "ADC_A_0", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "ADC_A_1", cmd->in_card_id, cmd->in_volume);
+        set_volume(PACKBACK, "SPDIF_TX_0", cmd->in_card_id, cmd->out_volume);
+        set_volume(PACKBACK, "SPDIF_TX_1", cmd->in_card_id, cmd->out_volume);                
     }
     else if (strcasecmp(cmd->interface, "adc_a-dac") == 0)
     {
         passthrough_ai_adc_a_enable(cmd->in_card_id, true);
         passthrough_ao_dac_enable(cmd->out_card_id, true);
+        set_volume(CAPTURE, "ADC_A_0", cmd->in_card_id, cmd->in_volume);
+        set_volume(CAPTURE, "ADC_A_1", cmd->in_card_id, cmd->in_volume);
+        set_volume(PACKBACK, "DAC_0", cmd->in_card_id, cmd->out_volume);
+        set_volume(PACKBACK, "DAC_1", cmd->in_card_id, cmd->out_volume);
     }
-    // for aec
-    else if (strcasecmp(cmd->interface, "spdif-adc_a-echo") == 0)
-    {
-        aec_ai_adc_a_echo_enable(cmd->in_card_id, true);
-        ao_spdif_enable(cmd->out_card_id, true, true);
-        ao_echo_enable(cmd->out_card_id, true);
-    }
-    else if (strcasecmp(cmd->interface, "dac-adc_a-echo") == 0)
-    {
-        aec_ai_adc_a_echo_enable(cmd->in_card_id, true);
-        ao_dac_enable(cmd->out_card_id, true);
-        ao_echo_enable(cmd->out_card_id, true);
-    }
+
     else
     {
         PrintErr("error interface (%s)\n", cmd->interface);
@@ -1491,10 +1540,6 @@ static int sample_init(struct ctx *ctx, struct cmd *cmd)
     else if(cmd->usecase_type == USECASE_PASSTHROUGH) {
         aio_open(ctx, SND_PCM_STREAM_CAPTURE, cmd->in_card_id, cmd->in_device_id, cmd->pt_in_out_channels, cmd->pt_in_rate, 0);
         aio_open(ctx, SND_PCM_STREAM_PLAYBACK, cmd->out_card_id, cmd->out_device_id, cmd->pt_in_out_channels, cmd->pt_out_rate, cmd->dma_rate);
-    }
-    else if(cmd->usecase_type == USECASE_AEC) {
-        aio_open(ctx, SND_PCM_STREAM_PLAYBACK, cmd->out_card_id, cmd->out_device_id, cmd->out_channels, cmd->out_rate, 0);
-        aio_open(ctx, SND_PCM_STREAM_CAPTURE, cmd->in_card_id, cmd->in_device_id, cmd->in_channels, cmd->in_rate, 0);
     }
 
     FUNC_EXIT();
@@ -1647,33 +1692,6 @@ static int sample_playback(struct ctx *ctx)
     return 0;
 }
 
-void* sample_passthrough_playback(void* data)
-{
-    FUNC_ENTER();
-    struct ctx* ctx = (struct ctx*)data;
-    sample_playback(ctx);
-    FUNC_EXIT();
-    return NULL;
-}
-
-void* sample_aec_capture(void* data)
-{
-    FUNC_ENTER();
-    struct ctx* ctx = (struct ctx*)data;
-    sample_capture(ctx);
-    FUNC_EXIT();
-    return NULL;
-}
-
-void* sample_aec_playback(void* data)
-{
-    FUNC_ENTER();
-    struct ctx* ctx = (struct ctx*)data;
-    sample_playback(ctx);
-    FUNC_EXIT();
-    return NULL;
-}
-
 int main(int argc, char *argv[])
 {
     int    ret = DEMO_SUCCESS;
@@ -1695,6 +1713,8 @@ int main(int argc, char *argv[])
                                            {"out_rate", 'r', OPTPARSE_REQUIRED},
                                            {"in_time", 'T', OPTPARSE_REQUIRED},
                                            {"out_time", 't', OPTPARSE_REQUIRED},
+                                           {"in_volume", 'V', OPTPARSE_REQUIRED},
+                                           {"out_volume", 'v', OPTPARSE_REQUIRED},                                           
                                            {"help", 'h', OPTPARSE_NONE},
 
                                            {0, 0, 0}};
@@ -1784,14 +1804,28 @@ int main(int argc, char *argv[])
             case 't':
                 if (sscanf(opts.optarg, "%u", &cmd.out_times) != 1)
                 {
-                    PrintErr("failed parsing in_card_id number '%s'\n", argv[1]);
+                    PrintErr("failed parsing out_time number '%s'\n", argv[1]);
                     return 1;
                 }
                 break;
             case 'T':
                 if (sscanf(opts.optarg, "%u", &cmd.in_times) != 1)
                 {
-                    PrintErr("failed parsing in_card_id number '%s'\n", argv[1]);
+                    PrintErr("failed parsing in_time number '%s'\n", argv[1]);
+                    return 1;
+                }
+                break;
+            case 'v':
+                if (sscanf(opts.optarg, "%u", &cmd.out_volume) != 1)
+                {
+                    PrintErr("failed parsing out_volume number '%s'\n", argv[1]);
+                    return 1;
+                }
+                break;
+            case 'V':
+                if (sscanf(opts.optarg, "%u", &cmd.in_volume) != 1)
+                {
+                    PrintErr("failed parsing in_volume number '%s'\n", argv[1]);
                     return 1;
                 }
                 break;
@@ -1815,20 +1849,6 @@ int main(int argc, char *argv[])
     else if (strcasecmp(usecase_type_str, "passthrough") == 0)
     {
         cmd.usecase_type = USECASE_PASSTHROUGH;
-    }
-    else if (strcasecmp(usecase_type_str, "passthrough_playback") == 0)
-    {
-        // voip
-        cmd.usecase_type = USECASE_PASSTHROUGH_PLAYBACK;
-    }
-    else if (strcasecmp(usecase_type_str, "aec") == 0)
-    {
-        cmd.usecase_type = USECASE_AEC;
-    }
-    else if (strcasecmp(usecase_type_str, "compress") == 0)
-    {
-        // spdif + nlpcm
-        cmd.usecase_type = USECASE_COMPRESS;
     }
 
     if (!cmd.interface || (!cmd.in_file_name && cmd.usecase_type == USECASE_CAPTURE) || (!cmd.out_file_name && cmd.usecase_type == USECASE_PLAYBACK))
@@ -1857,18 +1877,6 @@ int main(int argc, char *argv[])
     else if(cmd.usecase_type == USECASE_PASSTHROUGH)
     {
         sample_passthrough();
-    }
-    else if(cmd.usecase_type == USECASE_PASSTHROUGH_PLAYBACK)
-    {
-        sample_passthrough_playback(&ctx);
-    }
-    else if(cmd.usecase_type == USECASE_AEC)
-    {
-        pthread_create(&ctx.playback_thread[cmd.out_card_id], NULL, sample_aec_playback, &ctx);
-        pthread_create(&ctx.capture_thread[cmd.in_card_id], NULL, sample_aec_capture, &ctx);
-
-        pthread_join(ctx.playback_thread[cmd.out_card_id], NULL);
-        pthread_join(ctx.capture_thread[cmd.in_card_id], NULL);
     }
 
     sample_deinit(&ctx, &cmd);
