@@ -1,0 +1,14 @@
+prefix=/home/peng.xiong/P5_BGA19_wayland_32bit/buildroot-2019.08-rc2/output/host/arm-buildroot-linux-gnueabihf/sysroot/usr
+exec_prefix=${prefix}
+libdir=/usr/lib
+includedir=/usr/include/qt5
+
+
+Name: Qt5 OpenGLExtensions
+Description: Qt OpenGLExtensions module
+Version: 5.6.3
+Libs: -L${libdir} -lQt5OpenGLExtensions 
+Libs.private: -L/home/peng.xiong/P5_BGA19_wayland_32bit/buildroot-2019.08-rc2/output/host/arm-buildroot-linux-gnueabihf/sysroot/usr/lib  -lQt5Gui -lQt5Core -lrt -ldl -lpthread -lGLESv2 
+Cflags: -I${includedir}/QtOpenGLExtensions -I${includedir}
+Requires: Qt5Core Qt5Gui
+

@@ -1,0 +1,17 @@
+export QT_ROOT=/customer/qt_eglfs
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$QT_ROOT/lib
+export QT_QPA_PLATFORM_PLUGIN_PATH=$QT_ROOT/lib/qt/plugins/platforms
+export QT_QPA_FONTDIR=$QT_ROOT/lib/qt/fonts
+export FONTCONFIG_PATH=$QT_ROOT/lib/qt/fonts
+export QML_IMPORT_PATH=$QT_ROOT/qml
+export QML2_IMPORT_PATH=$QT_ROOT/qml
+export XDG_RUNTIME_DIR=/tmp/qt
+export QT_QPA_PLATFORM="eglfs"
+export EGLFS_DEVICE_INTEGRATION=eglfs_mali
+export QT_QPA_EGLFS_INTEGRATION="eglfs_kms"
+export QT_QPA_EGLFS_KMS_CONFIG=/customer/qt_eglfs/eglfs_kms_2.json
+export QT_QPA_EGLFS_KMS_ATOMIC=1
+mkdir /tmp/udev
+mkdir /tmp/qt
+./S10udev start
+./qopenglwidget &

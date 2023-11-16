@@ -1,0 +1,11 @@
+prefix=/home/alan.ma/drm/libdrm-2.4.89/libdrm-2.4.89/bin
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libdrm_nouveau
+Description: Userspace interface to nouveau kernel DRM services
+Version: 2.4.89
+Libs: -L${libdir} -ldrm_nouveau
+Cflags: -I${includedir} -I${includedir}/libdrm -I${includedir}/libdrm/nouveau
+Requires.private: libdrm

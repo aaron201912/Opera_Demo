@@ -1,0 +1,14 @@
+prefix=/home/peng.xiong/P5_BGA19_wayland_32bit/buildroot-2019.08-rc2/output/host/aarch64-buildroot-linux-gnu/sysroot/usr
+exec_prefix=${prefix}
+libdir=/usr/lib
+includedir=/usr/include/qt5
+
+host_bins=/home/peng.xiong/P5_BGA19_wayland_32bit/buildroot-2019.08-rc2/output/host/bin
+qt_config=minimal-config small-config medium-config large-config full-config release_tools fontconfig libudev evdev xkbcommon-evdev libinput gbm kms c++11 c++14 c++1z accessibility egl eglfs eglfs_gbm opengl opengles2 shared qpa reduce_exports clock-gettime clock-monotonic posix_fallocate mremap getaddrinfo ipv6ifname getifaddrs inotify eventfd threadsafe-cloexec system-jpeg system-png png system-freetype no-harfbuzz system-zlib mtdev glib dbus dbus-linked icu concurrent audio-backend release
+
+Name: Qt5 Core
+Description: Qt Core module
+Version: 5.6.3
+Libs: -L${libdir} -lQt5Core 
+Cflags: -I${includedir}/QtCore -I${includedir}
+

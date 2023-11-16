@@ -1,0 +1,13 @@
+prefix=/home/peng.xiong/P5_BGA19_wayland_32bit/buildroot-2019.08-rc2/output/host/aarch64-buildroot-linux-gnu/sysroot/usr
+exec_prefix=${prefix}
+libdir=/usr/lib
+includedir=/usr/include/qt5
+
+
+Name: Qt5 WebSockets
+Description: Qt WebSockets module
+Version: 5.6.3
+Libs: -L${libdir} -lQt5WebSockets 
+Cflags: -I${includedir}/QtWebSockets -I${includedir}
+Requires: Qt5Core Qt5Network
+
