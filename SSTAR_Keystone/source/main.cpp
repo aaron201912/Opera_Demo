@@ -57,6 +57,8 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 #define VEDIO_WIDTH     1920
 #define VEDIO_HEIGHT    1080
 
+
+
 typedef struct video_info_s {
     seq_info_t seq_info; // current stream sequence info, get seq info by callback function
 
@@ -306,19 +308,26 @@ typedef struct DrmModeConfiction_s
     unsigned int width;
     unsigned int height;
     unsigned int blob_id;
-    uint32_t drm_commited;
     drm_property_ids_t drm_mode_prop_ids[2];//0 for GOP;1 for mop
     drmModeRes *pDrmModeRes;
     drmModeConnectorPtr Connector;
 }DrmModeConfiction_t;
 static DrmModeConfiction_t g_stDrmCfg;
 
-typedef struct ST_GfxInputBuf_Node
+typedef struct St_ListNode_s
 {
     struct list_head    list;
     MI_SYS_DmaBufInfo_t                 stDmaBufInfo;
+    pthread_mutex_t EntryMutex;
     std::shared_ptr<GpuGraphicBuffer>   pstdInputBuffer;
-}ST_GfxInputBuf_Node;
+
+}St_ListNode_t;
+
+#define BUF_DEPTH 3  //enqueue for scl outputport
+std::shared_ptr<GpuGraphicBuffer> _g_GfxInputBuffer[BUF_DEPTH ];
+St_ListNode_t *_g_ListEntryNode[BUF_DEPTH ];
+
+
 
 static int  _g_rotate_mode  = (int)AV_ROTATE_90;//(int)AV_ROTATE_NONE;//
 
@@ -375,10 +384,12 @@ std::shared_ptr<GpuGraphicEffect> g_stdGpuGfx = std::make_shared<GpuGraphicEffec
 Rect g_RectDisplayRegion;
 
 LIST_HEAD(g_HeadListGpuGfxInput);
+LIST_HEAD(g_HeadListGpuGfxOutput);
+
 
 pthread_mutex_t ListMutexGfx = PTHREAD_MUTEX_INITIALIZER;
 
-MI_U8 u8EnqueueDmabufCnt = 0;
+//MI_U8 u8EnqueueDmabufCnt = 0;
 
 static  MI_U8 EDID_Test[256] =
 {
@@ -679,7 +690,7 @@ int init_drm_property_ids(uint32_t plane_id, drm_property_ids_t* prop_ids)//int 
     drmModeAtomicAddProperty(req, g_stDrmCfg.crtc_id, prop_ids->ACTIVE, 1);
     drmModeAtomicAddProperty(req, g_stDrmCfg.crtc_id, prop_ids->MODE_ID, g_stDrmCfg.blob_id);
     drmModeAtomicAddProperty(req, g_stDrmCfg.conn_id, prop_ids->CRTC_ID, g_stDrmCfg.crtc_id);
-    ret = drmModeAtomicCommit(g_stDrmCfg.fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK, NULL);
+    ret = drmModeAtomicCommit(g_stDrmCfg.fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
 
     if(ret != 0)
     {
@@ -839,7 +850,7 @@ static int atomic_set_plane(int plane_id, int fb_id, int is_realtime) {
     {
         printf("[atomic_set_plane]drmModeAtomicCommit failed ret=%d plane_id=%d\n",ret,plane_id);
     }
-    g_stDrmCfg.drm_commited = 1;
+
     drmModeAtomicFree(req);
 
     ret = sync_wait(g_stDrmCfg.out_fence, 16);
@@ -883,6 +894,7 @@ MI_S32 STUB_UpdataAllPointOffset()
         bUpdataGpuGfxPointFail = true;
         return -4;
     }
+
     if (bUpdataGpuGfxPointFail == false)
     {
         printf("Updata Keystone info done:\n");
@@ -893,7 +905,7 @@ MI_S32 STUB_UpdataAllPointOffset()
         printf("RBPointOffset X:%d, Y:%d\n", g_u32GpuRB_X, g_u32GpuRB_Y);
         printf("==================================\n");
         g_bGpuInfoChange_mop = false;
-        g_bGpuUifresh = true;
+        //g_bGpuUifresh = true;
     }
     return MI_SUCCESS;
 }
@@ -1156,6 +1168,112 @@ static void sstar_player_init()
 
 }
 
+void sstar_drm_update(stDmaBuf_t* OutputBuf, DrmPlaneId plane_id)
+{
+    int s32Ret;
+    drm_buf_t *drm_buf;
+    drm_buf = (drm_buf_t*)OutputBuf->priavte;
+
+    s32Ret = AddDmabufToDRM(OutputBuf);
+    if (s32Ret != 0)
+    {
+        //printf("AddDmabufToDRM:%d\n", s32Ret);
+    }
+    atomic_set_plane(plane_id, drm_buf->fb_id, 0);
+
+    if(plane_id == MOPG_ID0)
+    {
+        drm_free_gem_handle(&prev_mop_gem_handle);
+        prev_mop_gem_handle.first = drm_buf->fb_id;
+        prev_mop_gem_handle.second = drm_buf->gem_handle[0];
+    }
+    else
+    {
+        drm_free_gem_handle(&prev_gop_gem_handle);
+        prev_gop_gem_handle.first = drm_buf->fb_id;
+        prev_gop_gem_handle.second = drm_buf->gem_handle[0];
+    }
+
+}
+
+static MI_S32 sstar_init_drm()
+{
+    int ret;
+    /************************************************
+    step :init DRM(DISP)
+    *************************************************/
+
+    g_stDrmCfg.fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
+    if(g_stDrmCfg.fd < 0)
+    {
+        printf("Open dri/card0 fail \n");
+        return -1;
+    }
+
+    ret = drmSetClientCap(g_stDrmCfg.fd, DRM_CLIENT_CAP_ATOMIC, 1);
+    if(ret != 0)
+    {
+        printf("drmSetClientCap DRM_CLIENT_CAP_ATOMIC fail ret=%d  \n",ret);
+    }
+
+    ret = drmSetClientCap(g_stDrmCfg.fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+    if(ret != 0)
+    {
+        printf("drmSetClientCap DRM_CLIENT_CAP_UNIVERSAL_PLANES fail ret=%d  \n",ret);
+    }
+
+    g_stDrmCfg.pDrmModeRes = drmModeGetResources(g_stDrmCfg.fd);
+    g_stDrmCfg.crtc_id = g_stDrmCfg.pDrmModeRes->crtcs[0];
+    g_stDrmCfg.conn_id = g_stDrmCfg.pDrmModeRes->connectors[0];
+
+    g_stDrmCfg.Connector = drmModeGetConnector(g_stDrmCfg.fd, g_stDrmCfg.conn_id);
+	if (g_stDrmCfg.Connector->connector_type == DRM_MODE_CONNECTOR_DSI)//MIPI
+	{
+	    printf("This is MIPI Panel \n");
+	}
+    else
+    {
+
+	    printf("This is TTL Panel \n");
+    }
+    g_stDrmCfg.width = g_stDrmCfg.Connector->modes[0].hdisplay;
+    g_stDrmCfg.height = g_stDrmCfg.Connector->modes[0].vdisplay;
+
+    init_drm_property_ids(GOP_UI_ID, &g_stDrmCfg.drm_mode_prop_ids[0]);
+    init_drm_property_ids(MOPG_ID0, &g_stDrmCfg.drm_mode_prop_ids[1]);
+
+    return 0;
+
+}
+
+static void sstar_deinit_drm()
+{
+
+    if(g_stDrmCfg.Connector != NULL)
+    {
+    	drmModeFreeConnector(g_stDrmCfg.Connector);
+        g_stDrmCfg.Connector = NULL;
+    }
+    if(g_stDrmCfg.pDrmModeRes != NULL)
+    {
+    	drmModeFreeResources(g_stDrmCfg.pDrmModeRes);
+        g_stDrmCfg.pDrmModeRes = NULL;
+    }
+
+    //destory property blob
+    if(g_stDrmCfg.blob_id)
+    {
+        drmModeDestroyPropertyBlob(g_stDrmCfg.fd, g_stDrmCfg.blob_id);
+    }
+
+    if(g_stDrmCfg.fd)
+    {
+        close(g_stDrmCfg.fd);
+    }
+
+}
+
+
 static MI_S32 sstar_scl_init()
 {
     MI_U32 u32SclChnId = 0;
@@ -1319,6 +1437,7 @@ void *ST_UI_Task(void * arg)
     std::shared_ptr<GpuGraphicBuffer> inputBuffer;
     std::shared_ptr<GpuGraphicBuffer> outputBuffer;
     std::shared_ptr<GpuGraphicEffect> gpugfx = std::make_shared<GpuGraphicEffect>();
+    printf("ST_UI_Task\n");
 
     uint32_t u32UiFormat;
     u32UiFormat = DRM_FORMAT_ABGR8888;
@@ -1389,16 +1508,7 @@ void *ST_UI_Task(void * arg)
 
     OutputBuf.priavte = (void *)&drm_buf;
 
-    ret = AddDmabufToDRM(&OutputBuf);
-    if (ret != 0)
-    {
-        //printf("AddDmabufToDRM:%d\n", ret);
-    }
-    atomic_set_plane(GOP_UI_ID, drm_buf.fb_id, 0);
-    drm_free_gem_handle(&prev_gop_gem_handle);
-
-    prev_gop_gem_handle.first = drm_buf.fb_id;
-    prev_gop_gem_handle.second = drm_buf.gem_handle[0];
+    sstar_drm_update(&OutputBuf, GOP_UI_ID);
 
     while(g_bThreadExitUiDrm == TRUE)
     {
@@ -1408,22 +1518,18 @@ void *ST_UI_Task(void * arg)
 
             if (!gpugfx->updateLTPointOffset(g_u32GpuLT_X+1, g_u32GpuLT_Y+1))
             {
-                //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
                 printf("Failed to set keystone LT correction points\n");
             }
             if (!gpugfx->updateLBPointOffset(g_u32GpuLB_X+1, g_u32GpuLB_Y+1))
             {
-                //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
                 printf("Failed to set keystone LB correction points\n");
             }
             if (!gpugfx->updateRTPointOffset(g_u32GpuRT_X+1, g_u32GpuRT_Y+1))
             {
-                //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
                 printf("Failed to set keystone RT correction points\n");
             }
             if (!gpugfx->updateRBPointOffset(g_u32GpuRB_X+1, g_u32GpuRB_Y+1))
             {
-                //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
                 printf("Failed to set keystone RB correction points\n");
             }
 
@@ -1442,17 +1548,7 @@ void *ST_UI_Task(void * arg)
             OutputBuf.dataOffset[0] = 0;
 
             OutputBuf.priavte = (void *)&drm_buf;
-
-            ret = AddDmabufToDRM(&OutputBuf);
-            if (ret != 0)
-            {
-                //printf("AddDmabufToDRM:%d\n", ret);
-            }
-
-            atomic_set_plane(GOP_UI_ID, drm_buf.fb_id, 0);
-            drm_free_gem_handle(&prev_gop_gem_handle);
-            prev_gop_gem_handle.first = drm_buf.fb_id;
-            prev_gop_gem_handle.second = drm_buf.gem_handle[0];
+            sstar_drm_update(&OutputBuf, GOP_UI_ID);
 
         }
     }
@@ -1463,15 +1559,66 @@ void *ST_UI_Task(void * arg)
     return NULL;
 }
 
+static int init_queue_buf()
+{
+    int i;
+    uint32_t u32Width  = ALIGN_BACK(g_stDrmCfg.width,16);
+    uint32_t u32Height = g_stDrmCfg.height;
+    uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
+    int count_fail = 0;;
+    for(i = 0; i < BUF_DEPTH  ; i++)
+    {
+
+        _g_ListEntryNode[i] = new St_ListNode_t;
+        if(_g_ListEntryNode[i] == NULL)
+        {
+            printf("_g_ListEntryNode malloc Error!\n");
+            return -1;
+        }
+
+        _g_GfxInputBuffer[i] = std::make_shared<GpuGraphicBuffer>(u32Width, u32Height, u32GpuInputFormat, u32Width);
+        if (!_g_GfxInputBuffer[i]->initCheck())
+        {
+            printf("Create GpuGraphicBuffer failed\n");
+            count_fail++;
+            continue;
+        }
+
+        _g_ListEntryNode[i]->pstdInputBuffer = _g_GfxInputBuffer[i];
+
+        _g_ListEntryNode[i]->EntryMutex = PTHREAD_MUTEX_INITIALIZER;
+
+        list_add_tail(&_g_ListEntryNode[i]->list, &g_HeadListGpuGfxInput);
+
+    }
+    if(count_fail >= BUF_DEPTH )
+    {
+        printf("count_fail=%d \n",count_fail);
+        return -1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+static void deinit_queue_buf()
+{
+    for(int i = 0; i < BUF_DEPTH  ; i++)
+    {
+        _g_GfxInputBuffer[i] = NULL;
+        delete _g_ListEntryNode[i];
+    }
+    printf("deinit_queue_buf \n");
+}
+
+
 void *ST_SCL_Task(void * arg)
 {
     MI_S32 s32Ret = MI_SUCCESS;
-    uint32_t u32Width  = ALIGN_BACK(g_stDrmCfg.width,16);
-    uint32_t u32Height = g_stDrmCfg.height;
     std::shared_ptr<GpuGraphicBuffer> GfxInputBuffer;
-    uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
     MI_S32 s32SclChn = 0;
-    ST_GfxInputBuf_Node *ListSclToGfx;
+    St_ListNode_t *ListSclToGfx;
 
     //*******scl port0*********
     MI_SYS_ChnPort_t stSclChnPort0;
@@ -1486,7 +1633,6 @@ void *ST_SCL_Task(void * arg)
     {
         u8SclDev = 1;
     }
-
     memset(&stSclChnPort0, 0x0, sizeof(MI_SYS_ChnPort_t));
 
     stSclChnPort0.eModId = E_MI_MODULE_ID_SCL;
@@ -1498,28 +1644,33 @@ void *ST_SCL_Task(void * arg)
     ///*******g_bThreadExitScl*********//
     while (g_bThreadExitScl == TRUE)
     {
-        if(u8EnqueueDmabufCnt > 3)
-        {
-            continue;
-        }
-
-        ListSclToGfx = new ST_GfxInputBuf_Node;
-        if(ListSclToGfx == NULL)
-        {
-            printf("ListSclToGfx malloc Error!\n");
-        }
-
         if(g_bGpuInfoChange_mop == true)
         {
             STUB_UpdataAllPointOffset();
         }
 
-        GfxInputBuffer = std::make_shared<GpuGraphicBuffer>(u32Width, u32Height, u32GpuInputFormat, u32Width);
-        if (!GfxInputBuffer->initCheck())
+        if(!(list_empty(&g_HeadListGpuGfxInput)))
         {
-            printf("Create GpuGraphicBuffer failed\n");
+            ListSclToGfx = list_first_entry(&g_HeadListGpuGfxInput, St_ListNode_t, list);
+            GfxInputBuffer = ListSclToGfx->pstdInputBuffer;
+
+            if(GfxInputBuffer == NULL)
+            {
+                printf("Warn: Get input buf from list is NULL \n");
+                list_del(&(ListSclToGfx->list));
+                continue;
+            }
+            list_del(&(ListSclToGfx->list));
+
+            pthread_mutex_lock(&ListSclToGfx->EntryMutex);
+        }
+        else
+        {
+            //printf("Warn: Get input buf from list failed\n");
+            usleep(10*1000);
             continue;
         }
+
         memset(&stDmaBufInfo, 0x00, sizeof(MI_SYS_DmaBufInfo_t));
         stDmaBufInfo.s32Fd[0] = GfxInputBuffer->getFd();
         stDmaBufInfo.s32Fd[1] = GfxInputBuffer->getFd();
@@ -1533,15 +1684,10 @@ void *ST_SCL_Task(void * arg)
         {
             stDmaBufInfo.eFormat = (MI_SYS_PixelFormat_e)E_MI_SYS_PIXEL_FRAME_YUV_SEMIPLANAR_420;
         }
-
-        pthread_mutex_lock(&ListMutexGfx);
-
-        ListSclToGfx->pstdInputBuffer = GfxInputBuffer;
         memcpy(&(ListSclToGfx->stDmaBufInfo), &stDmaBufInfo, sizeof(MI_SYS_DmaBufInfo_t));
 
-        list_add_tail(&ListSclToGfx->list, &g_HeadListGpuGfxInput);
-
-        pthread_mutex_unlock(&ListMutexGfx);
+        pthread_mutex_unlock(&ListSclToGfx->EntryMutex);
+        list_add_tail(&ListSclToGfx->list, &g_HeadListGpuGfxOutput);
 
         s32Ret = MI_SYS_ChnOutputPortEnqueueDmabuf(&stSclChnPort0, &stDmaBufInfo);
         if (s32Ret != 0)
@@ -1549,11 +1695,8 @@ void *ST_SCL_Task(void * arg)
             printf("MI_SYS_ChnOutputPortEnqueueDmabuf fail\n");
             return NULL;
         }
-        else{
-            u8EnqueueDmabufCnt++;
-        }
     }
-    printf("g_bThreadExitScl == end!!!\n ");
+    printf("ST_SCL_Taskg_bThreadExitScl == end!!!\n ");
 
     return NULL;
 }
@@ -1561,6 +1704,8 @@ void *ST_SCL_Task(void * arg)
 void *ST_GFX_Task(void * arg)
 {
     MI_S32 s32Ret = MI_SUCCESS;
+    stDmaBuf_t OutputBuf;
+    drm_buf_t drm_buf;
 
     MI_U8  u8SclDev;
     if (g_u8PipelineMode == 0)
@@ -1575,7 +1720,7 @@ void *ST_GFX_Task(void * arg)
 
     //*******scl port0*********
     MI_SYS_ChnPort_t stSclChnPort0;
-    MI_SYS_DmaBufInfo_t stDmaBufInfo;
+    //MI_SYS_DmaBufInfo_t stDmaBufInfo;
     MI_SYS_DmaBufInfo_t stDmaOutputBufInfo2;
     memset(&stSclChnPort0, 0x0, sizeof(MI_SYS_ChnPort_t));
 
@@ -1591,10 +1736,6 @@ void *ST_GFX_Task(void * arg)
     uint32_t u32Height = g_stDrmCfg.height;
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
 
-    g_RectDisplayRegion.left = 0;
-    g_RectDisplayRegion.top = 0;
-    g_RectDisplayRegion.right = u32Width;
-    g_RectDisplayRegion.bottom = u32Height;
 
     int ret = g_stdGpuGfx->init(u32Width, u32Height, u32GpuInputFormat);
     if (ret) {
@@ -1615,104 +1756,106 @@ void *ST_GFX_Task(void * arg)
     }
     printf("Get scl Fd = %d, scl Chn = %d\n", s32FdSclPort0, s32SclChn);
 
-    MI_BOOL bGetBufListGfx = 0;
-
     std::shared_ptr<GpuGraphicBuffer> GfxInputBuffer;
     std::shared_ptr<GpuGraphicBuffer> GfxOutputBuffer;
 
-    ST_GfxInputBuf_Node *GfxReadListNode;
+    St_ListNode_t *GfxReadListNode;
     while(g_bThreadExitGfx == TRUE)
     {
-        bGetBufListGfx = 0;
+        FD_ZERO(&ReadFdsSclPort0);
+        FD_SET(s32FdSclPort0, &ReadFdsSclPort0);
+        tv.tv_sec = 2;
 
-        pthread_mutex_lock(&ListMutexGfx);
-        if(!(list_empty(&g_HeadListGpuGfxInput)))
+        s32Ret = select(s32FdSclPort0 + 1, &ReadFdsSclPort0, NULL, NULL, &tv);
+        if (s32Ret < 0)
         {
-            GfxReadListNode = list_first_entry(&g_HeadListGpuGfxInput, ST_GfxInputBuf_Node, list);
-            GfxInputBuffer = GfxReadListNode->pstdInputBuffer;
-
-            memcpy(&stDmaBufInfo, &GfxReadListNode->stDmaBufInfo, sizeof(MI_SYS_DmaBufInfo_t));
-            bGetBufListGfx = 1;
-            list_del(&(GfxReadListNode->list));
-            delete GfxReadListNode;
+            printf("gfx_bgb_Task%d select failed\n", s32SclChn);
+            sleep(1);
+            break;
         }
-        pthread_mutex_unlock(&ListMutexGfx);
-
-        if(bGetBufListGfx)
+        else if (0 == s32Ret)
         {
-            stDmaBuf_t OutputBuf;
-            drm_buf_t drm_buf;
-            FD_ZERO(&ReadFdsSclPort0);
-            FD_SET(s32FdSclPort0, &ReadFdsSclPort0);
-            tv.tv_sec = 2;
-
-            s32Ret = select(s32FdSclPort0 + 1, &ReadFdsSclPort0, NULL, NULL, &tv);
-            if (s32Ret < 0)
+            printf("gfx_bgb_Task%d select timeout\n", s32SclChn);
+            continue;
+        }
+        else
+        {
+            s32Ret = MI_SYS_ChnOutputPortDequeueDmabuf(&stSclChnPort0, &stDmaOutputBufInfo2);
+            if(stDmaOutputBufInfo2.u32Status == MI_SYS_DMABUF_STATUS_INVALID)
             {
-                printf("gfx_bgb_Task%d select failed\n", s32SclChn);
-                sleep(1);
-                break;
+                printf("SclOutputPort DequeueDmabuf statu is INVALID\n");
+                s32Ret = MI_SYS_ChnOutputPortDropDmabuf(&stSclChnPort0, &stDmaOutputBufInfo2);
+                if(MI_SUCCESS != s32Ret)
+                {
+                    printf("failed, drop dma-buf return fail\n");
+                }
+                continue;
             }
-            else if (0 == s32Ret)
+            if(stDmaOutputBufInfo2.u32Status == MI_SYS_DMABUF_STATUS_DROP)
             {
+                printf("SclOutputPort DequeueDmabuf statu is DROP\n");
                 continue;
             }
             else
             {
-                s32Ret = MI_SYS_ChnOutputPortDequeueDmabuf(&stSclChnPort0, &stDmaOutputBufInfo2);
-                if(stDmaOutputBufInfo2.u32Status == MI_SYS_DMABUF_STATUS_INVALID)
-                {
-                    printf("SclOutputPort DequeueDmabuf statu is INVALID\n");
-                    //s32Ret = MI_SYS_ChnOutputPortDropDmabuf(&stSclChnPort0, &stDmaBufInfo);
-                    s32Ret = MI_SYS_ChnOutputPortDropDmabuf(&stSclChnPort0, &stDmaOutputBufInfo2);
-                    if(MI_SUCCESS != s32Ret)
-                    {
-                        printf("failed, drop dma-buf return fail\n");
-                    }
-                    GfxInputBuffer = nullptr;
-                    continue;
-                }
-                if(stDmaOutputBufInfo2.u32Status == MI_SYS_DMABUF_STATUS_DROP)
-                {
-                    printf("SclOutputPort DequeueDmabuf statu is DROP\n");
-                    GfxInputBuffer = nullptr;
-                    continue;
-                }
-                else
-                {
-                    //printf("SclOutputPort DequeueDmabuf statu is Done\n");
-                }
-                int ret = g_stdGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion, GfxOutputBuffer);
-                if (ret) {
-                    printf("Gpu graphic effect process failed\n");
-
-                }
-
-                GfxInputBuffer = nullptr;
-                u8EnqueueDmabufCnt--;
-
-                OutputBuf.width   = GfxOutputBuffer->getWidth();
-                OutputBuf.height  = GfxOutputBuffer->getHeight();
-                OutputBuf.format  = E_STREAM_YUV420;
-                OutputBuf.fds[0]  = GfxOutputBuffer->getFd();
-                OutputBuf.fds[1]  = GfxOutputBuffer->getFd();
-                OutputBuf.stride[0] = GfxOutputBuffer->getWidth();
-                OutputBuf.stride[1] = GfxOutputBuffer->getWidth();
-                OutputBuf.dataOffset[0] = 0;
-                OutputBuf.dataOffset[1] = OutputBuf.width * OutputBuf.height;
-                OutputBuf.priavte = (void *)&drm_buf;
-
-                s32Ret = AddDmabufToDRM(&OutputBuf);
-                if (s32Ret != 0)
-                {
-                    //printf("AddDmabufToDRM:%d\n", s32Ret);
-                }
-                atomic_set_plane(MOPG_ID0, drm_buf.fb_id, 0);
-                drm_free_gem_handle(&prev_mop_gem_handle);
-                prev_mop_gem_handle.first = drm_buf.fb_id;
-                prev_mop_gem_handle.second = drm_buf.gem_handle[0];
-
+                //printf("SclOutputPort DequeueDmabuf statu is Done\n");
             }
+
+
+            if(!(list_empty(&g_HeadListGpuGfxOutput)))
+            {
+                GfxReadListNode = list_first_entry(&g_HeadListGpuGfxOutput, St_ListNode_t, list);
+                GfxInputBuffer = GfxReadListNode->pstdInputBuffer;
+
+                if(GfxInputBuffer == NULL)
+                {
+                    list_del(&(GfxReadListNode->list));
+                    printf("Warn: Get output buf from list is NULL\n");
+                    continue;
+                }
+                list_del(&(GfxReadListNode->list));
+
+                pthread_mutex_lock(&GfxReadListNode->EntryMutex);
+            }
+            else
+            {
+                printf("Warn: Get output buf from list failed\n");
+                continue;
+            }
+
+            int ret = g_stdGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion, GfxOutputBuffer);
+            if (ret) {
+                printf("Gpu graphic effect process failed\n");
+            }
+
+            pthread_mutex_unlock(&GfxReadListNode->EntryMutex);
+            list_add_tail(&GfxReadListNode->list, &g_HeadListGpuGfxInput);
+
+            OutputBuf.width   = GfxOutputBuffer->getWidth();
+            OutputBuf.height  = GfxOutputBuffer->getHeight();
+            OutputBuf.format  = E_STREAM_YUV420;
+            OutputBuf.fds[0]  = GfxOutputBuffer->getFd();
+            OutputBuf.fds[1]  = GfxOutputBuffer->getFd();
+            OutputBuf.stride[0] = GfxOutputBuffer->getWidth();
+            OutputBuf.stride[1] = GfxOutputBuffer->getWidth();
+            OutputBuf.dataOffset[0] = 0;
+            OutputBuf.dataOffset[1] = OutputBuf.width * OutputBuf.height;
+            OutputBuf.priavte = (void *)&drm_buf;
+#if 0
+            s32Ret = AddDmabufToDRM(&OutputBuf);
+            if (s32Ret != 0)
+            {
+                //printf("AddDmabufToDRM:%d\n", s32Ret);
+            }
+            atomic_set_plane(MOPG_ID0, drm_buf.fb_id, 0);
+            drm_free_gem_handle(&prev_mop_gem_handle);
+            prev_mop_gem_handle.first = drm_buf.fb_id;
+            prev_mop_gem_handle.second = drm_buf.gem_handle[0];
+
+#endif
+            sstar_drm_update(&OutputBuf, MOPG_ID0);
+
+
         }
     }
     g_stdGpuGfx->deinit();
@@ -1848,86 +1991,6 @@ static void * sstar_video_thread(void * arg)
     printf("[%s %d]exit!\n", __FUNCTION__, __LINE__);
     return NULL;
 }
-
-
-
-static MI_S32 sstar_init_drm()
-{
-    int ret;
-    /************************************************
-    step :init DRM(DISP)
-    *************************************************/
-
-    g_stDrmCfg.fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
-    if(g_stDrmCfg.fd < 0)
-    {
-        printf("Open dri/card0 fail \n");
-        return -1;
-    }
-
-    ret = drmSetClientCap(g_stDrmCfg.fd, DRM_CLIENT_CAP_ATOMIC, 1);
-    if(ret != 0)
-    {
-        printf("drmSetClientCap DRM_CLIENT_CAP_ATOMIC fail ret=%d  \n",ret);
-    }
-
-    ret = drmSetClientCap(g_stDrmCfg.fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
-    if(ret != 0)
-    {
-        printf("drmSetClientCap DRM_CLIENT_CAP_UNIVERSAL_PLANES fail ret=%d  \n",ret);
-    }
-
-    g_stDrmCfg.pDrmModeRes = drmModeGetResources(g_stDrmCfg.fd);
-    g_stDrmCfg.crtc_id = g_stDrmCfg.pDrmModeRes->crtcs[0];
-    g_stDrmCfg.conn_id = g_stDrmCfg.pDrmModeRes->connectors[0];
-
-    g_stDrmCfg.Connector = drmModeGetConnector(g_stDrmCfg.fd, g_stDrmCfg.conn_id);
-	if (g_stDrmCfg.Connector->connector_type == DRM_MODE_CONNECTOR_DSI)//MIPI
-	{
-	    printf("This is MIPI Panel \n");
-	}
-    else
-    {
-
-	    printf("This is TTL Panel \n");
-    }
-    g_stDrmCfg.width = g_stDrmCfg.Connector->modes[0].hdisplay;
-    g_stDrmCfg.height = g_stDrmCfg.Connector->modes[0].vdisplay;
-
-    init_drm_property_ids(GOP_UI_ID, &g_stDrmCfg.drm_mode_prop_ids[0]);
-    init_drm_property_ids(MOPG_ID0, &g_stDrmCfg.drm_mode_prop_ids[1]);
-
-    return 0;
-
-}
-
-static void sstar_deinit_drm()
-{
-
-    if(g_stDrmCfg.Connector != NULL)
-    {
-    	drmModeFreeConnector(g_stDrmCfg.Connector);
-        g_stDrmCfg.Connector = NULL;
-    }
-    if(g_stDrmCfg.pDrmModeRes != NULL)
-    {
-    	drmModeFreeResources(g_stDrmCfg.pDrmModeRes);
-        g_stDrmCfg.pDrmModeRes = NULL;
-    }
-
-    //destory property blob
-    if(g_stDrmCfg.blob_id)
-    {
-        drmModeDestroyPropertyBlob(g_stDrmCfg.fd, g_stDrmCfg.blob_id);
-    }
-
-    if(g_stDrmCfg.fd)
-    {
-        close(g_stDrmCfg.fd);
-    }
-
-}
-
 
 
 static MI_S32 STUB_PipelineMode0Init()
@@ -2083,18 +2146,22 @@ static MI_S32 STUB_PipelineMode0Init()
 
     pthread_create(&g_pThreadScl, NULL, ST_SCL_Task, NULL);
     pthread_create(&g_pThreadGfx, NULL, ST_GFX_Task, NULL);
-    if(bShowUi)
-    {
-        pthread_create(&g_pThreadUiDrm, NULL, ST_UI_Task, NULL);
-    }
 
     return MI_SUCCESS;
-}//STUB_PipelineMode0Init end
+}
 
 
 static MI_S32 STUB_PipelineMode1Init()
 {
     int ret;
+
+    ret = init_queue_buf();
+    if (ret < 0)
+    {
+        printf("mm_player_open fail \n");
+        return -1;
+    }
+
     sstar_player_init();
     sstar_scl_init();
 
@@ -2114,13 +2181,9 @@ static MI_S32 STUB_PipelineMode1Init()
         usleep(10);
         //printf("Scl do not have buffer!!!!!\n");
     }
+
     pthread_create(&g_pThreadScl, NULL, ST_SCL_Task, NULL);
     pthread_create(&g_pThreadGfx, NULL, ST_GFX_Task, NULL);
-
-    if(bShowUi)
-    {
-        pthread_create(&g_pThreadUiDrm, NULL, ST_UI_Task, NULL);
-    }
 
     return MI_SUCCESS;
 }
@@ -2210,14 +2273,13 @@ static MI_S32 STUB_PipelineMode1Deinit()
     step :deinit SCL
     *************************************************/
     sstar_scl_deinit();
-
+    deinit_queue_buf();
     return MI_SUCCESS;
 
 }
 
 static MI_S32 STUB_BaseModuleInit()
 {
-    int ret = 0;
     /************************************************
     step :init SYS
     *************************************************/
@@ -2242,11 +2304,15 @@ static MI_S32 STUB_BaseModuleInit()
     //***********************************************
     //end init sys
 
-    ret = sstar_init_drm();
-    if(ret != 0)
+    g_RectDisplayRegion.left = 0;
+    g_RectDisplayRegion.top = 0;
+    g_RectDisplayRegion.right = ALIGN_BACK(g_stDrmCfg.width,16);
+    g_RectDisplayRegion.bottom = g_stDrmCfg.height;
+
+
+    if(bShowUi)
     {
-        printf("init_drm fail \n");
-        return -1;
+        pthread_create(&g_pThreadUiDrm, NULL, ST_UI_Task, NULL);
     }
 
     if (g_u8PipelineMode == 0)
@@ -2268,18 +2334,27 @@ static MI_S32 STUB_BaseModuleInit()
 static MI_S32 STUB_BaseModuleDeinit()
 {
     g_bThreadExitScl = false;
-    pthread_join(g_pThreadScl, NULL);
+    if(g_pThreadScl)
+    {
+        pthread_join(g_pThreadScl, NULL);
+    }
 
     g_bThreadExitGfx = false;
-    pthread_join(g_pThreadGfx, NULL);
+    if(g_pThreadGfx)
+    {
+        pthread_join(g_pThreadGfx, NULL);
+    }
 
     if(bShowUi)
     {
         g_bThreadExitUiDrm = false;
-        pthread_join(g_pThreadUiDrm, NULL);
+        if(g_pThreadUiDrm)
+        {
+            pthread_join(g_pThreadUiDrm, NULL);
+        }
     }
 
-    sstar_deinit_drm();
+    //sstar_deinit_drm();
 
     if (g_u8PipelineMode == 0)
     {
@@ -2414,6 +2489,7 @@ void STUB_Common_Pause(void)
                     g_u32GpuLT_X = g_u32GpuLT_X + 10;
                     g_u32GpuLT_Y = g_u32GpuLT_Y + 10;
                     g_bGpuInfoChange_mop = true;
+                    g_bGpuUifresh = true;
             }
         }
         if(ch == 'b')
@@ -2430,6 +2506,7 @@ void STUB_Common_Pause(void)
                 g_u32GpuLT_X = g_u32GpuLT_X - 10;
                 g_u32GpuLT_Y = g_u32GpuLT_Y - 10;
                 g_bGpuInfoChange_mop = true;
+                g_bGpuUifresh = true;
             }
         }
         if(ch == 'c')
@@ -2444,6 +2521,7 @@ void STUB_Common_Pause(void)
                     g_u32GpuLB_X = g_u32GpuLB_X + 10;
                     g_u32GpuLB_Y = g_u32GpuLB_Y + 10;
                     g_bGpuInfoChange_mop = true;
+                    g_bGpuUifresh = true;
             }
         }
         if(ch == 'd')
@@ -2460,6 +2538,7 @@ void STUB_Common_Pause(void)
                 g_u32GpuLB_X = g_u32GpuLB_X - 10;
                 g_u32GpuLB_Y = g_u32GpuLB_Y - 10;
                 g_bGpuInfoChange_mop = true;
+                g_bGpuUifresh = true;
             }
         }
         if(ch == 'e')
@@ -2474,6 +2553,7 @@ void STUB_Common_Pause(void)
                     g_u32GpuRT_X = g_u32GpuRT_X + 10;
                     g_u32GpuRT_Y = g_u32GpuRT_Y + 10;
                     g_bGpuInfoChange_mop = true;
+                    g_bGpuUifresh = true;
             }
         }
         if(ch == 'f')
@@ -2490,6 +2570,7 @@ void STUB_Common_Pause(void)
                 g_u32GpuRT_X = g_u32GpuRT_X - 10;
                 g_u32GpuRT_Y = g_u32GpuRT_Y - 10;
                 g_bGpuInfoChange_mop = true;
+                g_bGpuUifresh = true;
             }
         }
         if(ch == 'g')
@@ -2504,6 +2585,7 @@ void STUB_Common_Pause(void)
                     g_u32GpuRB_X = g_u32GpuRB_X + 10;
                     g_u32GpuRB_Y = g_u32GpuRB_Y + 10;
                     g_bGpuInfoChange_mop = true;
+                    g_bGpuUifresh = true;
             }
         }
         if(ch == 'h')
@@ -2520,6 +2602,7 @@ void STUB_Common_Pause(void)
                 g_u32GpuRB_X = g_u32GpuRB_X - 10;
                 g_u32GpuRB_Y = g_u32GpuRB_Y - 10;
                 g_bGpuInfoChange_mop = true;
+                g_bGpuUifresh = true;
             }
         }
 
@@ -2553,12 +2636,20 @@ MI_S32 main(int argc, char **argv)
         usage_help();
         return -1;
     }
+    ret = sstar_init_drm();
+    if(ret != 0)
+    {
+        printf("init_drm fail \n");
+        return -1;
+    }
 
     STCHECKRESULT(STUB_BaseModuleInit());
 
     STUB_Common_Pause();
 
+
     STCHECKRESULT(STUB_BaseModuleDeinit());
+    sstar_deinit_drm();
 
     return 0;
 }

@@ -30,6 +30,9 @@ C_OBJS := $(foreach n,$(C_SRCS),$(addsuffix .c.o,$(basename ${n})))
 LIBS := -L$(ALKAID_PATH)/release/chip/p5/sigma_common_libs/glibc/6.4.0/dynamic
 LIBS += -lcam_fs_wrapper -lmi_common -lcam_os_wrapper
 
+LIBS += -L./lib/ffmpeg/arm/lib/glibc/6.4.0/static
+LIBS += -lssplayer
+
 LIBS += -L$(ALKAID_PATH)/release/chip/p5/dispcam/common/glibc/6.4.0/mi_libs/dynamic
 LIBS += -lmi_sys
 LIBS += -lmi_scl
@@ -51,8 +54,7 @@ LIBS += -ldrm
 LIBS += -L./lib/ffmpeg/arm/lib/glibc/6.4.0/dynamic
 LIBS += -lavformat -lavcodec -lavutil -lswscale -lswresample
 
-LIBS += -L./lib/ffmpeg/arm/lib/glibc/6.4.0/static
-LIBS += -lssplayer
+
 
 LIBS += -L./lib/alsa/arm/lib/glibc/6.4.0/dynamic
 LIBS += -lswresample -lasound
