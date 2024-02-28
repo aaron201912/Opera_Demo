@@ -734,8 +734,8 @@ unsigned int AddDmabufToDRM(stDmaBuf_t* pstDmaBuf)
 
     if(pstDmaBuf->format  == E_STREAM_YUV420)
     {
-        pitches[0] = width;
-        pitches[1] = width;
+        pitches[0] = pstDmaBuf->width;
+        pitches[1] = pstDmaBuf->width;
         offsets[0] = 0;
         offsets[1] = pitches[0] * height;
         drm_fmt = DRM_FORMAT_NV12;
@@ -744,7 +744,7 @@ unsigned int AddDmabufToDRM(stDmaBuf_t* pstDmaBuf)
     {
         //width = g_u32UiWidth;
         //height = g_u32UiHeight;
-        pitches[0] = width * 4;
+        pitches[0] = pstDmaBuf->width * 4;
         offsets[0] = 0;
         drm_fmt = DRM_FORMAT_ABGR8888;
     }
@@ -823,7 +823,7 @@ static int atomic_set_plane(int plane_id, int fb_id, int is_realtime) {
         add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_H, g_stDrmCfg.height);
         add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].SRC_X, 0);
         add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].SRC_Y, 0);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].SRC_W, ALIGN_BACK(g_stDrmCfg.width,16) << 16);
+        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].SRC_W, g_stDrmCfg.width << 16);
         add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].SRC_H, g_stDrmCfg.height << 16);
     }
     else
@@ -836,7 +836,7 @@ static int atomic_set_plane(int plane_id, int fb_id, int is_realtime) {
         add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_H, _g_MediaPlayer.video_info.out_height);
         add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].SRC_X, 0);
         add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].SRC_Y, 0);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].SRC_W, ALIGN_BACK(g_stDrmCfg.width,16) << 16);
+        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].SRC_W, g_stDrmCfg.width << 16);
         add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].SRC_H, g_stDrmCfg.height << 16);
     }
     if(is_realtime)
@@ -1312,7 +1312,7 @@ static MI_S32 sstar_scl_init()
 
     memset(&stSclOutPortParam, 0x0, sizeof(MI_SCL_OutPortParam_t));
     stSclOutPortParam.ePixelFormat = (MI_SYS_PixelFormat_e) E_MI_SYS_PIXEL_FRAME_YUV_SEMIPLANAR_420;
-    stSclOutPortParam.stSCLOutputSize.u16Width= ALIGN_BACK(g_stDrmCfg.width,16);
+    stSclOutPortParam.stSCLOutputSize.u16Width= ALIGN_UP(g_stDrmCfg.width,16);
     stSclOutPortParam.stSCLOutputSize.u16Height= g_stDrmCfg.height;
 
     stSclOutPortParam.bMirror = FALSE;
@@ -1370,8 +1370,9 @@ static MI_S32 sstar_scl_deinit()
 
 void *ST_UI_Task(void * arg)
 {
-    int BigUiWidth = ALIGN_BACK(g_stDrmCfg.width,16);
+    int BigUiWidth = g_stDrmCfg.width;
     int BigUiHeight = g_stDrmCfg.height;
+    int align_width = ALIGN_UP(BigUiWidth,16);
     //int SmallUiWidth  = g_u32UiWidth;
     //int SmallUiHeight = g_u32UiHeight;
     int SmallUiWidth  = _g_MediaPlayer.ui_info.in_width;
@@ -1447,7 +1448,7 @@ void *ST_UI_Task(void * arg)
     stDmaBuf_t OutputBuf;
     drm_buf_t drm_buf;
 
-    inputBuffer = std::make_shared<GpuGraphicBuffer>(BigUiWidth, BigUiHeight, u32UiFormat, BigUiWidth * 4);
+    inputBuffer = std::make_shared<GpuGraphicBuffer>(align_width, BigUiHeight, u32UiFormat, align_width * 4);
     if (!inputBuffer->initCheck()) {
         printf("Create GpuGraphicBuffer failed\n");
         return NULL;
@@ -1459,9 +1460,23 @@ void *ST_UI_Task(void * arg)
         return NULL;
     }
 
-    memcpy(pVaddr, BigUiImageData, BigUiWidth*BigUiHeight*sizeof(uint32_t));
+    //memcpy(pVaddr, BigUiImageData, BigUiWidth*BigUiHeight*sizeof(uint32_t));
+    for(int i=0 ;i < BigUiHeight;i++)
+    {
+        memcpy(pVaddr + (i * align_width * 4), (void *)BigUiImageData + (i * BigUiWidth * 4), BigUiWidth*4);
+    }
 
-    ret = gpugfx->init(BigUiWidth, BigUiHeight, u32UiFormat);
+    if((_g_MediaPlayer.video_info.rotate == 1 || _g_MediaPlayer.video_info.rotate == 3) && (g_stDrmCfg.width > g_stDrmCfg.height))
+    {
+        align_width = ALIGN_UP(BigUiHeight,16);
+        ret = gpugfx->init(align_width, BigUiWidth, u32UiFormat);
+        printf("warn:Images may deform \n");
+    }
+    else
+    {
+        align_width = ALIGN_UP(BigUiWidth,16);
+        ret = gpugfx->init(align_width, BigUiHeight, u32UiFormat);
+    }
     if (ret) {
         printf("Failed to init gpu graphic effect\n");
         return NULL;
@@ -1487,6 +1502,20 @@ void *ST_UI_Task(void * arg)
         //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
         printf("Failed to set keystone RB correction points\n");
     }
+
+    if(_g_MediaPlayer.video_info.rotate == 1)
+    {
+        gpugfx->updateTransformStatus(Transform :: ROT_90);
+    }
+    else if(_g_MediaPlayer.video_info.rotate == 2)
+    {
+        gpugfx->updateTransformStatus(Transform :: ROT_180);
+    }
+    else if(_g_MediaPlayer.video_info.rotate == 3)
+    {
+        gpugfx->updateTransformStatus(Transform :: ROT_270);
+    }
+
     ret = gpugfx->process(inputBuffer, g_RectDisplayRegion, outputBuffer);
     if (ret) {
         printf("Gpu graphic effect process failed\n");
@@ -1533,6 +1562,20 @@ void *ST_UI_Task(void * arg)
                 printf("Failed to set keystone RB correction points\n");
             }
 
+            if(_g_MediaPlayer.video_info.rotate == 1)
+            {
+                gpugfx->updateTransformStatus(Transform :: ROT_90);
+            }
+            else if(_g_MediaPlayer.video_info.rotate == 2)
+            {
+                gpugfx->updateTransformStatus(Transform :: ROT_180);
+            }
+            else if(_g_MediaPlayer.video_info.rotate == 3)
+            {
+                gpugfx->updateTransformStatus(Transform :: ROT_270);
+            }
+
+
             ret = gpugfx->process(inputBuffer, g_RectDisplayRegion, outputBuffer);
             if (ret)
             {
@@ -1562,7 +1605,7 @@ void *ST_UI_Task(void * arg)
 static int init_queue_buf()
 {
     int i;
-    uint32_t u32Width  = ALIGN_BACK(g_stDrmCfg.width,16);
+    uint32_t u32Width  = ALIGN_UP(g_stDrmCfg.width,16);
     uint32_t u32Height = g_stDrmCfg.height;
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
     int count_fail = 0;;
@@ -1732,7 +1775,7 @@ void *ST_GFX_Task(void * arg)
     /************************************************
     step :init GPU
     *************************************************/
-    uint32_t u32Width  = ALIGN_BACK(g_stDrmCfg.width,16);
+    uint32_t u32Width  = ALIGN_UP(g_stDrmCfg.width,16);
     uint32_t u32Height = g_stDrmCfg.height;
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
 
@@ -2306,7 +2349,7 @@ static MI_S32 STUB_BaseModuleInit()
 
     g_RectDisplayRegion.left = 0;
     g_RectDisplayRegion.top = 0;
-    g_RectDisplayRegion.right = ALIGN_BACK(g_stDrmCfg.width,16);
+    g_RectDisplayRegion.right = ALIGN_UP(g_stDrmCfg.width,16);
     g_RectDisplayRegion.bottom = g_stDrmCfg.height;
 
 
