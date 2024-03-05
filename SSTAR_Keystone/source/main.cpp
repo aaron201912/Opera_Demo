@@ -53,10 +53,10 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 #include "mi_hvp.h"
 #include "mi_hvp_datatype.h"
 #include "mi_scl.h"
+#include <linux/dma-buf.h>
 
 #define VEDIO_WIDTH     1920
 #define VEDIO_HEIGHT    1080
-
 
 
 typedef struct video_info_s {
@@ -303,7 +303,12 @@ typedef struct DrmModeConfiction_s
 {
     int fd;
     int out_fence;
+    int osd_fbid;
+    int video_fbid;
     unsigned int crtc_id;
+    unsigned int osd_commited;
+    unsigned int mop_commited;
+
     unsigned int conn_id;
     unsigned int width;
     unsigned int height;
@@ -322,6 +327,16 @@ typedef struct St_ListNode_s
     std::shared_ptr<GpuGraphicBuffer>   pstdInputBuffer;
 
 }St_ListNode_t;
+
+
+typedef struct St_ListOutBufNode_s
+{
+    struct list_head    list;
+    pthread_mutex_t EntryMutex;
+    std::shared_ptr<GpuGraphicBuffer> pOutBuffer;
+
+}St_ListOutBufNode_t;
+
 
 #define BUF_DEPTH 3  //enqueue for scl outputport
 std::shared_ptr<GpuGraphicBuffer> _g_GfxInputBuffer[BUF_DEPTH ];
@@ -356,6 +371,12 @@ MI_BOOL g_bThreadExitGfx = TRUE;
 pthread_t g_pThreadUiDrm;
 MI_BOOL g_bThreadExitUiDrm = TRUE;
 
+pthread_t g_pThreadCommit;
+MI_BOOL g_bThreadExitCommit = TRUE;
+
+pthread_t g_pThreadUpdatePoint;
+MI_BOOL g_bThreadExitUpdatePoint = TRUE;
+
 
 pthread_t g_player_thread;
 MI_BOOL g_bThreadExitPlayer = TRUE;
@@ -372,6 +393,8 @@ MI_U32 g_u32GpuRB_X, g_u32GpuRB_Y;
 MI_BOOL g_bGpuInfoChange_mop = false;
 MI_BOOL g_bGpuUifresh = false;
 
+MI_BOOL g_bChangePointOffset = false;
+
 MI_U32 g_u32SclBufferCnt = 0;
 
 
@@ -379,12 +402,26 @@ std::pair<uint32_t, uint32_t> prev_gop_gem_handle(static_cast<uint32_t>(-1), sta
 std::pair<uint32_t, uint32_t> prev_mop_gem_handle(static_cast<uint32_t>(-1), static_cast<uint32_t>(-1));
 
 
-
-std::shared_ptr<GpuGraphicEffect> g_stdGpuGfx = std::make_shared<GpuGraphicEffect>();
+std::shared_ptr<GpuGraphicEffect> g_stdOsdGpuGfx = std::make_shared<GpuGraphicEffect>();
+std::shared_ptr<GpuGraphicEffect> g_stdVideoGpuGfx = std::make_shared<GpuGraphicEffect>();
 Rect g_RectDisplayRegion;
 
 LIST_HEAD(g_HeadListGpuGfxInput);
 LIST_HEAD(g_HeadListGpuGfxOutput);
+
+
+LIST_HEAD(g_HeadListOsdOutput);
+LIST_HEAD(g_HeadListOsdCommit);
+
+LIST_HEAD(g_HeadListVideoOutput);
+LIST_HEAD(g_HeadListVideoCommit);
+
+
+std::shared_ptr<GpuGraphicBuffer> g_OsdOutputBuffer[BUF_DEPTH];
+St_ListOutBufNode_t *_g_OsdListEntryNode[BUF_DEPTH];
+
+std::shared_ptr<GpuGraphicBuffer> g_VideoOutputBuffer[BUF_DEPTH];
+St_ListOutBufNode_t *_g_VideoListEntryNode[BUF_DEPTH];
 
 
 pthread_mutex_t ListMutexGfx = PTHREAD_MUTEX_INITIALIZER;
@@ -626,6 +663,24 @@ static int get_property_id(int fd, drmModeObjectProperties* props, const char* n
     return id;
 }
 
+static int get_property_value(int fd, drmModeObjectProperties* props, const char* name) {
+    int value = 0;
+    drmModePropertyPtr property;
+    int found = 0;
+
+    for (unsigned int i = 0; !found && i < props->count_props; ++i) {
+        property = drmModeGetProperty(fd, props->props[i]);
+        if (!strcmp(property->name, name)) {
+            value = property->values[i];
+            found = 1;
+        }
+        drmModeFreeProperty(property);
+    }
+
+    return value;
+}
+
+
 int init_drm_property_ids(uint32_t plane_id, drm_property_ids_t* prop_ids)//int fd, uint32_t crtc_id, uint32_t plane_id, uint32_t conn_id,drm_property_ids_t* prop_ids)
 {
 
@@ -660,6 +715,7 @@ int init_drm_property_ids(uint32_t plane_id, drm_property_ids_t* prop_ids)//int 
         printf("Get properties error,plane_id=%d \n",plane_id);
         return -1;
     }
+    printf("plane_id=%d zpos=%d \n", plane_id, get_property_value(g_stDrmCfg.fd,props,"zpos"));
 
     prop_ids->FB_ID = get_property_id(g_stDrmCfg.fd, props, "FB_ID");
     prop_ids->CRTC_ID = get_property_id(g_stDrmCfg.fd, props, "CRTC_ID");
@@ -804,7 +860,7 @@ static int drm_free_gem_handle(std::pair<uint32_t, uint32_t> *gem_handle) {
 
 
 
-static int atomic_set_plane(int plane_id, int fb_id, int is_realtime) {
+static int atomic_set_plane(int osd_fb_id, int video_fb_id, int is_realtime) {
     int ret;
     drmModeAtomicReqPtr req;
     req = drmModeAtomicAlloc();
@@ -813,42 +869,53 @@ static int atomic_set_plane(int plane_id, int fb_id, int is_realtime) {
         return -1;
     }
 
-    if(plane_id == GOP_UI_ID)
+    if(osd_fb_id > 0 )//&& !g_stDrmCfg.osd_commited)
     {
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].FB_ID , fb_id);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_ID, g_stDrmCfg.crtc_id);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_X, 0);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_Y, 0);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_W, g_stDrmCfg.width);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_H, g_stDrmCfg.height);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].SRC_X, 0);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].SRC_Y, 0);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].SRC_W, g_stDrmCfg.width << 16);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[0].SRC_H, g_stDrmCfg.height << 16);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].FB_ID , osd_fb_id);
+        //add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].zpos , 2);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_ID, g_stDrmCfg.crtc_id);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_X, 0);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_Y, 0);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_W, g_stDrmCfg.width);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_H, g_stDrmCfg.height);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].SRC_X, 0);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].SRC_Y, 0);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].SRC_W, g_stDrmCfg.width << 16);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].SRC_H, g_stDrmCfg.height << 16);
+        g_stDrmCfg.osd_commited = 1;
+        //printf("g_stDrmCfg.osd_commited = 1 \n");
     }
-    else
+    if(video_fb_id > 0 )//&& !g_stDrmCfg.mop_commited)
     {
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].FB_ID, fb_id);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_ID, g_stDrmCfg.crtc_id);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_X, _g_MediaPlayer.video_info.pos_x);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_Y, _g_MediaPlayer.video_info.pos_y);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_W, _g_MediaPlayer.video_info.out_width);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_H, _g_MediaPlayer.video_info.out_height);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].SRC_X, 0);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].SRC_Y, 0);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].SRC_W, g_stDrmCfg.width << 16);
-        add_plane_property(req, plane_id, g_stDrmCfg.drm_mode_prop_ids[1].SRC_H, g_stDrmCfg.height << 16);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].FB_ID, video_fb_id);
+        //add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].zpos , 18);
+
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_ID, g_stDrmCfg.crtc_id);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_X, 0);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_Y, 0);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_W,  g_stDrmCfg.width);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_H,  g_stDrmCfg.height);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_X, _g_MediaPlayer.video_info.pos_x);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_Y, _g_MediaPlayer.video_info.pos_y);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_W, _g_MediaPlayer.video_info.out_width << 16);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_H, _g_MediaPlayer.video_info.out_height << 16);
+        g_stDrmCfg.mop_commited = 1;
+        //printf("g_stDrmCfg.mop_commited = 1 \n");
     }
+
     if(is_realtime)
     {
         //add_plane_property(req, plane_id, "realtime_mode", 1);
     }
+
+
     drmModeAtomicAddProperty(req, g_stDrmCfg.crtc_id, g_stDrmCfg.drm_mode_prop_ids[1].FENCE_ID, (uint64_t)&g_stDrmCfg.out_fence);//use this flag,must be close out_fence
 
     ret = drmModeAtomicCommit(g_stDrmCfg.fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
     if(ret != 0)
     {
-        printf("[atomic_set_plane]drmModeAtomicCommit failed ret=%d plane_id=%d\n",ret,plane_id);
+        printf("[atomic_set_plane]drmModeAtomicCommit failed ret=%d x=%d y=%d out_width=%d out_height=%d\n",
+            ret,_g_MediaPlayer.video_info.pos_x,_g_MediaPlayer.video_info.pos_y,_g_MediaPlayer.video_info.out_width,_g_MediaPlayer.video_info.out_height);
     }
 
     drmModeAtomicFree(req);
@@ -863,38 +930,68 @@ static int atomic_set_plane(int plane_id, int fb_id, int is_realtime) {
     return 0;
 }
 
-MI_S32 STUB_UpdataAllPointOffset()
+MI_S32 sstar_update_pointoffset()
 {
     MI_BOOL bUpdataGpuGfxPointFail = false;
-    if (!g_stdGpuGfx->updateLTPointOffset(g_u32GpuLT_X+2, g_u32GpuLT_Y+2))
+
+    if(g_stdOsdGpuGfx != NULL )
     {
-        //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-        printf("Failed to set keystone LT correction points\n");
-        bUpdataGpuGfxPointFail = true;
-        return -1;
-    }
-    if (!g_stdGpuGfx->updateLBPointOffset(g_u32GpuLB_X+2, g_u32GpuLB_Y+2))
-    {
-        //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-        printf("Failed to set keystone LB correction points\n");
-        bUpdataGpuGfxPointFail = true;
-        return -2;
-    }
-    if (!g_stdGpuGfx->updateRTPointOffset(g_u32GpuRT_X+2, g_u32GpuRT_Y+2))
-    {
-        //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-        printf("Failed to set keystone RT correction points\n");
-        bUpdataGpuGfxPointFail = true;
-        return -3;
-    }
-    if (!g_stdGpuGfx->updateRBPointOffset(g_u32GpuRB_X+2, g_u32GpuRB_Y+2))
-    {
-        //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-        printf("Failed to set keystone RB correction points\n");
-        bUpdataGpuGfxPointFail = true;
-        return -4;
+        //Update osd Pointoffset
+        if (!g_stdOsdGpuGfx->updateLTPointOffset(g_u32GpuLT_X+1, g_u32GpuLT_Y+1))
+        {
+            printf("Failed to set keystone LT correction points\n");
+            bUpdataGpuGfxPointFail = true;
+            return -1;
+        }
+        if (!g_stdOsdGpuGfx->updateLBPointOffset(g_u32GpuLB_X+1, g_u32GpuLB_Y+1))
+        {
+            printf("Failed to set keystone LB correction points\n");
+            bUpdataGpuGfxPointFail = true;
+            return -1;
+        }
+        if (!g_stdOsdGpuGfx->updateRTPointOffset(g_u32GpuRT_X+1, g_u32GpuRT_Y+1))
+        {
+            printf("Failed to set keystone RT correction points\n");
+            bUpdataGpuGfxPointFail = true;
+            return -1;
+        }
+        if (!g_stdOsdGpuGfx->updateRBPointOffset(g_u32GpuRB_X+1, g_u32GpuRB_Y+1))
+        {
+            printf("Failed to set keystone RB correction points\n");
+            bUpdataGpuGfxPointFail = true;
+            return -1;
+        }
     }
 
+    if(g_stdVideoGpuGfx != NULL )
+    {
+
+        //Update video Pointoffset
+        if (!g_stdVideoGpuGfx->updateLTPointOffset(g_u32GpuLT_X+2, g_u32GpuLT_Y+2))
+        {
+            printf("Failed to set keystone LT correction points\n");
+            bUpdataGpuGfxPointFail = true;
+            return -1;
+        }
+        if (!g_stdVideoGpuGfx->updateLBPointOffset(g_u32GpuLB_X+2, g_u32GpuLB_Y+2))
+        {
+            printf("Failed to set keystone LB correction points\n");
+            bUpdataGpuGfxPointFail = true;
+            return -2;
+        }
+        if (!g_stdVideoGpuGfx->updateRTPointOffset(g_u32GpuRT_X+2, g_u32GpuRT_Y+2))
+        {
+            printf("Failed to set keystone RT correction points\n");
+            bUpdataGpuGfxPointFail = true;
+            return -3;
+        }
+        if (!g_stdVideoGpuGfx->updateRBPointOffset(g_u32GpuRB_X+2, g_u32GpuRB_Y+2))
+        {
+            printf("Failed to set keystone RB correction points\n");
+            bUpdataGpuGfxPointFail = true;
+            return -4;
+        }
+    }
     if (bUpdataGpuGfxPointFail == false)
     {
         printf("Updata Keystone info done:\n");
@@ -910,28 +1007,67 @@ MI_S32 STUB_UpdataAllPointOffset()
     return MI_SUCCESS;
 }
 
-MI_S32 STUB_ResetAllpointOffset()
+MI_S32 sstar_reset_osdpointoffset()
 {
-    if (!g_stdGpuGfx->updateLTPointOffset(3, 3))
+    if(g_stdOsdGpuGfx != NULL )
     {
-        printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-        return -1;
+        //Update osd Pointoffset
+        if (!g_stdOsdGpuGfx->updateLTPointOffset(3, 3))
+        {
+            printf("Failed to set keystone LT correction points\n");
+            return -1;
+        }
+        if (!g_stdOsdGpuGfx->updateLBPointOffset(3, 3))
+        {
+            printf("Failed to set keystone LB correction points\n");
+            return -2;
+        }
+        if (!g_stdOsdGpuGfx->updateRTPointOffset(3, 3))
+        {
+            printf("Failed to set keystone RT correction points\n");
+            return -3;
+        }
+        if (!g_stdOsdGpuGfx->updateRBPointOffset(3, 3))
+        {
+            printf("Failed to set keystone RB correction points\n");
+            return -4;
+        }
     }
-    if (!g_stdGpuGfx->updateLBPointOffset(3, 3))
+    return MI_SUCCESS;
+
+}
+
+MI_S32 sstar_reset_moppointoffset()
+{
+    if(g_stdVideoGpuGfx != NULL )
     {
-        printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-        return -2;
+
+        if (!g_stdVideoGpuGfx->updateLTPointOffset(3, 3))
+        {
+            printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
+            return -1;
+        }
+        if (!g_stdVideoGpuGfx->updateLBPointOffset(3, 3))
+        {
+            printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
+            return -2;
+        }
+        if (!g_stdVideoGpuGfx->updateRTPointOffset(3, 3))
+        {
+            printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
+            return -3;
+        }
+        if (!g_stdVideoGpuGfx->updateRBPointOffset(3, 3))
+        {
+            printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
+            return -4;
+        }
     }
-    if (!g_stdGpuGfx->updateRTPointOffset(3, 3))
+    else
     {
-        printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-        return -3;
+        printf("[LINE: %d]g_stdVideoGpuGfx is null\n",__LINE__);
     }
-    if (!g_stdGpuGfx->updateRBPointOffset(3, 3))
-    {
-        printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-        return -4;
-    }
+
     return MI_SUCCESS;
 }
 
@@ -1158,6 +1294,7 @@ static void sstar_player_init()
     _g_MediaPlayer.video_info.ratio = (int)AV_SCREEN_MODE;
     _g_MediaPlayer.param.protocol = AV_PROTOCOL_FILE;
 
+
     // set default disp windows size
     _g_MediaPlayer.param.panel_width = g_stDrmCfg.width;
     _g_MediaPlayer.param.panel_height = g_stDrmCfg.height;
@@ -1167,8 +1304,8 @@ static void sstar_player_init()
     sstar_player_default_opts();
 
 }
-
-void sstar_drm_update(stDmaBuf_t* OutputBuf, DrmPlaneId plane_id)
+#if 0
+void sstar_drm_update(stDmaBuf_t* OutputBuf, DrmPlaneId plane_id, int need_commit)
 {
     int s32Ret;
     drm_buf_t *drm_buf;
@@ -1195,7 +1332,7 @@ void sstar_drm_update(stDmaBuf_t* OutputBuf, DrmPlaneId plane_id)
     }
 
 }
-
+#endif
 static MI_S32 sstar_init_drm()
 {
     int ret;
@@ -1367,241 +1504,6 @@ static MI_S32 sstar_scl_deinit()
     return MI_SUCCESS;
 }
 
-
-void *ST_UI_Task(void * arg)
-{
-    int BigUiWidth = g_stDrmCfg.width;
-    int BigUiHeight = g_stDrmCfg.height;
-    int align_width = ALIGN_UP(BigUiWidth,16);
-    //int SmallUiWidth  = g_u32UiWidth;
-    //int SmallUiHeight = g_u32UiHeight;
-    int SmallUiWidth  = _g_MediaPlayer.ui_info.in_width;
-    int SmallUiHeight = _g_MediaPlayer.ui_info.in_height;
-
-
-    int startX = 100;
-    int startY = 100;
-    FILE* file = nullptr;
-
-    uint32_t* BigUiImageData    = (uint32_t*)malloc(BigUiWidth * BigUiHeight * sizeof(uint32_t));
-    uint32_t* SmallUiImageData  = (uint32_t*)malloc(SmallUiWidth * SmallUiHeight * sizeof(uint32_t));
-
-    file = fopen(g_InputUiPath, "r+");
-    if (file)
-    {
-        for (int i = 0; i < SmallUiWidth * SmallUiHeight; i++)
-        {
-            uint8_t pixelData[4];
-            fread(pixelData, sizeof(uint8_t), 4, file);
-            SmallUiImageData[i] = (pixelData[0] << 24) | (pixelData[1] << 16) | (pixelData[2] << 8) | pixelData[3];
-        }
-        fclose(file);
-    }
-    else
-    {
-        printf("无法打开文件 %s\n", g_InputUiPath);
-    }
-
-    for (int y = 0; y < BigUiHeight; y++)
-    {
-        for (int x = 0; x < BigUiWidth; x++)
-        {
-            if (x < 5 || x >= BigUiWidth - 5 || y < 5 || y >= BigUiHeight - 5)
-            {
-                // 在边缘区域绘制黑色像素
-                int index = y * BigUiWidth + x; // 计算像素索引
-                BigUiImageData[index] = 0xFF000000; // 设置为黑色（Alpha: FF, Red: 00, Green: 00, Blue: 00）
-            } else
-            {
-                // 其余部分设置为透明
-                int index = y * BigUiWidth + x; // 计算像素索引
-                BigUiImageData[index] = 0x00000000; // 设置为透明（Alpha: 00, Red: 00, Green: 00, Blue: 00）
-            }
-        }
-    }
-
-    for (int y = 0; y < SmallUiHeight; y++)
-    {
-        for (int x = 0; x < SmallUiWidth; x++)
-        {
-            uint32_t tmpData = SmallUiImageData[y * SmallUiWidth + x];
-
-            int bigX = startX + x;
-            int bigY = startY + y;
-            if (bigX < BigUiWidth && bigY < BigUiHeight)
-            {
-                BigUiImageData[bigY * BigUiWidth + bigX] = tmpData;
-            }
-        }
-    }
-
-    std::shared_ptr<GpuGraphicBuffer> inputBuffer;
-    std::shared_ptr<GpuGraphicBuffer> outputBuffer;
-    std::shared_ptr<GpuGraphicEffect> gpugfx = std::make_shared<GpuGraphicEffect>();
-    printf("ST_UI_Task\n");
-
-    uint32_t u32UiFormat;
-    u32UiFormat = DRM_FORMAT_ABGR8888;
-    void *pVaddr = nullptr;
-
-    int32_t ret;
-    stDmaBuf_t OutputBuf;
-    drm_buf_t drm_buf;
-
-    inputBuffer = std::make_shared<GpuGraphicBuffer>(align_width, BigUiHeight, u32UiFormat, align_width * 4);
-    if (!inputBuffer->initCheck()) {
-        printf("Create GpuGraphicBuffer failed\n");
-        return NULL;
-    }
-
-    pVaddr = mmap(NULL, inputBuffer->getBufferSize(), PROT_WRITE|PROT_READ, MAP_SHARED, inputBuffer->getFd(), 0);
-    if(!pVaddr) {
-        printf("Failed to mmap dma buffer\n");
-        return NULL;
-    }
-
-    //memcpy(pVaddr, BigUiImageData, BigUiWidth*BigUiHeight*sizeof(uint32_t));
-    for(int i=0 ;i < BigUiHeight;i++)
-    {
-        memcpy(pVaddr + (i * align_width * 4), (void *)BigUiImageData + (i * BigUiWidth * 4), BigUiWidth*4);
-    }
-
-    if((_g_MediaPlayer.video_info.rotate == 1 || _g_MediaPlayer.video_info.rotate == 3) && (g_stDrmCfg.width > g_stDrmCfg.height))
-    {
-        align_width = ALIGN_UP(BigUiHeight,16);
-        ret = gpugfx->init(align_width, BigUiWidth, u32UiFormat);
-        printf("warn:Images may deform \n");
-    }
-    else
-    {
-        align_width = ALIGN_UP(BigUiWidth,16);
-        ret = gpugfx->init(align_width, BigUiHeight, u32UiFormat);
-    }
-    if (ret) {
-        printf("Failed to init gpu graphic effect\n");
-        return NULL;
-    }
-
-    if (!gpugfx->updateLTPointOffset(g_u32GpuLT_X+1, g_u32GpuLT_Y+1))
-    {
-        //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-        printf("Failed to set keystone LT correction points\n");
-    }
-    if (!gpugfx->updateLBPointOffset(g_u32GpuLB_X+1, g_u32GpuLB_Y+1))
-    {
-        //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-        printf("Failed to set keystone LB correction points\n");
-    }
-    if (!gpugfx->updateRTPointOffset(g_u32GpuRT_X+1, g_u32GpuRT_Y+1))
-    {
-        //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-        printf("Failed to set keystone RT correction points\n");
-    }
-    if (!gpugfx->updateRBPointOffset(g_u32GpuRB_X+1, g_u32GpuRB_Y+1))
-    {
-        //printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-        printf("Failed to set keystone RB correction points\n");
-    }
-
-    if(_g_MediaPlayer.video_info.rotate == 1)
-    {
-        gpugfx->updateTransformStatus(Transform :: ROT_90);
-    }
-    else if(_g_MediaPlayer.video_info.rotate == 2)
-    {
-        gpugfx->updateTransformStatus(Transform :: ROT_180);
-    }
-    else if(_g_MediaPlayer.video_info.rotate == 3)
-    {
-        gpugfx->updateTransformStatus(Transform :: ROT_270);
-    }
-
-    ret = gpugfx->process(inputBuffer, g_RectDisplayRegion, outputBuffer);
-    if (ret) {
-        printf("Gpu graphic effect process failed\n");
-        return NULL;
-    }
-
-    if(munmap(pVaddr, inputBuffer->getBufferSize()) != 0)
-    {
-        printf("Failed to munmap dma buffer\n");
-    }
-    pVaddr = nullptr;
-
-    OutputBuf.width   = outputBuffer->getWidth();
-    OutputBuf.height  = outputBuffer->getHeight();
-    OutputBuf.format  = E_STREAM_ABGR8888;
-    OutputBuf.fds[0]  = outputBuffer->getFd();
-    OutputBuf.stride[0] = outputBuffer->getWidth() * 4;
-    OutputBuf.dataOffset[0] = 0;
-
-    OutputBuf.priavte = (void *)&drm_buf;
-
-    sstar_drm_update(&OutputBuf, GOP_UI_ID);
-
-    while(g_bThreadExitUiDrm == TRUE)
-    {
-        if(g_bGpuUifresh == true)
-        {
-            g_bGpuUifresh = false;
-
-            if (!gpugfx->updateLTPointOffset(g_u32GpuLT_X+1, g_u32GpuLT_Y+1))
-            {
-                printf("Failed to set keystone LT correction points\n");
-            }
-            if (!gpugfx->updateLBPointOffset(g_u32GpuLB_X+1, g_u32GpuLB_Y+1))
-            {
-                printf("Failed to set keystone LB correction points\n");
-            }
-            if (!gpugfx->updateRTPointOffset(g_u32GpuRT_X+1, g_u32GpuRT_Y+1))
-            {
-                printf("Failed to set keystone RT correction points\n");
-            }
-            if (!gpugfx->updateRBPointOffset(g_u32GpuRB_X+1, g_u32GpuRB_Y+1))
-            {
-                printf("Failed to set keystone RB correction points\n");
-            }
-
-            if(_g_MediaPlayer.video_info.rotate == 1)
-            {
-                gpugfx->updateTransformStatus(Transform :: ROT_90);
-            }
-            else if(_g_MediaPlayer.video_info.rotate == 2)
-            {
-                gpugfx->updateTransformStatus(Transform :: ROT_180);
-            }
-            else if(_g_MediaPlayer.video_info.rotate == 3)
-            {
-                gpugfx->updateTransformStatus(Transform :: ROT_270);
-            }
-
-
-            ret = gpugfx->process(inputBuffer, g_RectDisplayRegion, outputBuffer);
-            if (ret)
-            {
-                printf("Gpu graphic effect process failed\n");
-                return NULL;
-            }
-
-            OutputBuf.width   = outputBuffer->getWidth();
-            OutputBuf.height  = outputBuffer->getHeight();
-            OutputBuf.format  = E_STREAM_ABGR8888;
-            OutputBuf.fds[0]  = outputBuffer->getFd();
-            OutputBuf.stride[0] = outputBuffer->getWidth() * 4;
-            OutputBuf.dataOffset[0] = 0;
-
-            OutputBuf.priavte = (void *)&drm_buf;
-            sstar_drm_update(&OutputBuf, GOP_UI_ID);
-
-        }
-    }
-
-    inputBuffer = nullptr;
-    gpugfx->deinit();
-
-    return NULL;
-}
-
 static int init_queue_buf()
 {
     int i;
@@ -1609,6 +1511,27 @@ static int init_queue_buf()
     uint32_t u32Height = g_stDrmCfg.height;
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
     int count_fail = 0;;
+
+    for(i = 0; i < BUF_DEPTH  ; i++)
+    {
+        _g_OsdListEntryNode[i] = new St_ListOutBufNode_t;
+        _g_VideoListEntryNode[i] = new St_ListOutBufNode_t;
+        if(_g_OsdListEntryNode[i] == NULL || _g_VideoListEntryNode[i] == NULL)
+        {
+            printf("_g_OsdListEntryNode || _g_VideoListEntryNode malloc Error!\n");
+            return -1;
+        }
+        _g_OsdListEntryNode[i]->pOutBuffer = g_OsdOutputBuffer[i];
+        _g_OsdListEntryNode[i]->EntryMutex = PTHREAD_MUTEX_INITIALIZER;
+
+        _g_VideoListEntryNode[i]->pOutBuffer = g_VideoOutputBuffer[i];
+        _g_VideoListEntryNode[i]->EntryMutex = PTHREAD_MUTEX_INITIALIZER;
+
+        list_add_tail(&_g_OsdListEntryNode[i]->list, &g_HeadListOsdOutput);
+        list_add_tail(&_g_VideoListEntryNode[i]->list, &g_HeadListVideoOutput);
+
+    }
+
     for(i = 0; i < BUF_DEPTH  ; i++)
     {
 
@@ -1643,6 +1566,392 @@ static int init_queue_buf()
     {
         return 0;
     }
+}
+
+
+
+int g_flag = 0;
+
+void *sstar_update_pointoffset_thread(void * arg)
+{
+    while(g_bThreadExitUpdatePoint)
+    {
+        if(g_bChangePointOffset)
+        {
+            sstar_update_pointoffset();
+            g_bChangePointOffset = false;
+        }
+        else
+        {
+            usleep(10 * 1000);
+            continue;
+        }
+    }
+}
+//#define DUMP_OPTION
+FILE* open_dump_file(char *path)
+{
+#ifdef DUMP_OPTION
+    static FILE *out_fd = NULL;
+
+    char file_out[128];
+    memset(file_out, '\0', sizeof(file_out));
+    sprintf(file_out, path);
+
+    if(out_fd == NULL)
+    {
+        out_fd = fopen(file_out, "awb");
+        if (!out_fd)
+        {
+            printf("fopen %s falied!\n", file_out);
+            fclose(out_fd);
+            out_fd = NULL;
+        }
+    }
+    return out_fd;
+#else
+    return NULL;
+#endif
+}
+
+void wirte_dump_file(FILE *fd, char *p_viraddr, int len)
+{
+#ifdef DUMP_OPTION
+    printf("write len=%d \n",len);
+    if(fd && p_viraddr && len > 0)
+    {
+        fwrite(p_viraddr, len, 1, fd);
+    }
+#endif
+}
+
+void close_dump_file(FILE *fd)
+{
+#ifdef DUMP_OPTION
+    if(fd)
+    {
+        fclose(fd);
+        fd = NULL;
+    }
+#endif
+}
+
+
+void *sstar_commit_thread(void * arg)
+{
+    stDmaBuf_t osd_OutputBuf;
+    stDmaBuf_t video_OutputBuf;
+    drm_buf_t osd_drm_buf;
+    drm_buf_t video_drm_buf;
+    drmVBlank vbl;
+    int ret;
+
+    St_ListOutBufNode_t *ListOsdCommit;
+    St_ListOutBufNode_t *ListVideoCommit;
+    std::shared_ptr<GpuGraphicBuffer> osdCommitBuf;
+    std::shared_ptr<GpuGraphicBuffer> videoCommitBuf;
+    memset(&osd_drm_buf, 0x00, sizeof(drm_buf_t));
+    memset(&video_drm_buf, 0x00, sizeof(drm_buf_t));
+    while(g_bThreadExitCommit)
+    {
+
+
+        vbl.request.type = DRM_VBLANK_RELATIVE;
+        vbl.request.sequence = 1; // 等待下一个 VBlank
+        vbl.request.signal = NULL;
+
+        ret = drmWaitVBlank(g_stDrmCfg.fd, &vbl);
+        if (ret) {
+            printf("Error waiting for VBlank: %d\n", ret);
+            continue;
+        }
+        if(!(list_empty(&g_HeadListOsdCommit)))
+        {
+            ListOsdCommit = list_first_entry(&g_HeadListOsdCommit, St_ListOutBufNode_t, list);
+            pthread_mutex_lock(&ListOsdCommit->EntryMutex);
+            osdCommitBuf = ListOsdCommit->pOutBuffer;
+            list_del(&(ListOsdCommit->list));
+            pthread_mutex_unlock(&ListOsdCommit->EntryMutex);
+            list_add_tail(&ListOsdCommit->list, &g_HeadListOsdOutput);
+
+            osd_OutputBuf.width   = osdCommitBuf->getWidth();
+            osd_OutputBuf.height  = osdCommitBuf->getHeight();
+            osd_OutputBuf.format  = E_STREAM_ABGR8888;
+            osd_OutputBuf.fds[0]  = osdCommitBuf->getFd();
+            osd_OutputBuf.stride[0] = osdCommitBuf->getWidth() * 4;
+            osd_OutputBuf.dataOffset[0] = 0;
+            osd_OutputBuf.priavte = (void *)&osd_drm_buf;
+            AddDmabufToDRM(&osd_OutputBuf);
+            #if 0
+                FILE *file_fd;
+                file_fd = open_dump_file("customer/test_rgb_dump.bin");
+                void * pVaddr = NULL;
+                pVaddr = mmap(NULL, osdCommitBuf->getBufferSize(), PROT_WRITE|PROT_READ, MAP_SHARED, osdCommitBuf->getFd(), 0);
+                if(!pVaddr) {
+                    printf("Failed to mmap dma buffer\n");
+                    return NULL;
+                }
+                wirte_dump_file(file_fd, (char *)pVaddr,osdCommitBuf->getWidth()*osdCommitBuf->getHeight()*4);
+                close_dump_file(file_fd);
+            #endif
+        }
+
+        if(!(list_empty(&g_HeadListVideoCommit)))
+        {
+            ListVideoCommit = list_first_entry(&g_HeadListVideoCommit, St_ListOutBufNode_t, list);
+            pthread_mutex_lock(&ListVideoCommit->EntryMutex);
+            videoCommitBuf = ListVideoCommit->pOutBuffer;
+            list_del(&(ListVideoCommit->list));
+            pthread_mutex_unlock(&ListVideoCommit->EntryMutex);
+            list_add_tail(&ListVideoCommit->list, &g_HeadListVideoOutput);
+
+            video_OutputBuf.width   = videoCommitBuf->getWidth();
+            video_OutputBuf.height  = videoCommitBuf->getHeight();
+            video_OutputBuf.format  = E_STREAM_YUV420;
+            video_OutputBuf.fds[0]  = videoCommitBuf->getFd();
+            video_OutputBuf.fds[1]  = videoCommitBuf->getFd();
+            video_OutputBuf.stride[0] = videoCommitBuf->getWidth();
+            video_OutputBuf.stride[1] = videoCommitBuf->getWidth();
+            video_OutputBuf.dataOffset[0] = 0;
+            video_OutputBuf.dataOffset[1] = video_OutputBuf.width * video_OutputBuf.height;
+            video_OutputBuf.priavte = (void *)&video_drm_buf;
+
+            AddDmabufToDRM(&video_OutputBuf);
+        }
+
+        atomic_set_plane(osd_drm_buf.fb_id, video_drm_buf.fb_id, 0);
+
+        if(video_drm_buf.fb_id > 0)
+        {
+            drm_free_gem_handle(&prev_mop_gem_handle);
+            prev_mop_gem_handle.first = video_drm_buf.fb_id;
+            prev_mop_gem_handle.second = video_drm_buf.gem_handle[0];
+            video_drm_buf.fb_id = 0;
+        }
+        if(osd_drm_buf.fb_id > 0)
+        {
+            drm_free_gem_handle(&prev_gop_gem_handle);
+            prev_gop_gem_handle.first = osd_drm_buf.fb_id;
+            prev_gop_gem_handle.second = osd_drm_buf.gem_handle[0];
+            osd_drm_buf.fb_id = 0;
+        }
+
+    }
+
+    printf("sstar_commit_thread exit\n");
+}
+
+
+
+
+void *ST_UI_Task(void * arg)
+{
+    int ret;
+    int BigUiWidth = g_stDrmCfg.width;
+    int BigUiHeight = g_stDrmCfg.height;
+    int align_width = ALIGN_UP(BigUiWidth,16);
+    int SmallUiWidth  = _g_MediaPlayer.ui_info.in_width;
+    int SmallUiHeight = _g_MediaPlayer.ui_info.in_height;
+    uint32_t tmpData;
+
+    St_ListOutBufNode_t *ListOsdOutput;
+
+    int startX = 100;
+    int startY = 100;
+    FILE* file = nullptr;
+    uint32_t* BigUiImageData    = (uint32_t*)malloc(BigUiWidth * BigUiHeight * sizeof(uint32_t));
+    uint32_t* SmallUiImageData  = (uint32_t*)malloc(SmallUiWidth * SmallUiHeight * sizeof(uint32_t));
+    memset((void *)BigUiImageData, 0x00, BigUiWidth * BigUiHeight * sizeof(uint32_t) );
+    memset((void *)SmallUiImageData, 0x00, SmallUiWidth * SmallUiHeight * sizeof(uint32_t));
+
+    file = fopen(g_InputUiPath, "r+");
+    if (file)
+    {
+        for (int i = 0; i < SmallUiWidth * SmallUiHeight; i++)
+        {
+            uint8_t pixelData[4];
+            fread(pixelData, sizeof(uint8_t), 4, file);
+            SmallUiImageData[i] = (pixelData[0] << 24) | (pixelData[1] << 16) | (pixelData[2] << 8) | pixelData[3];
+        }
+        fclose(file);
+    }
+    else
+    {
+        printf("无法打开文件 %s\n", g_InputUiPath);
+    }
+
+    #if 0
+    for (int y = 0; y < BigUiHeight; y++)
+    {
+        for (int x = 0; x < BigUiWidth; x++)
+        {
+            if (x < 5 || x >= BigUiWidth - 5 || y < 5 || y >= BigUiHeight - 5)
+            {
+                // 在边缘区域绘制黑色像素
+                int index = y * BigUiWidth + x; // 计算像素索引
+                BigUiImageData[index] = 0xFF000000; // 设置为黑色（Alpha: FF, Red: 00, Green: 00, Blue: 00）
+            } else
+            {
+                // 其余部分设置为透明
+                int index = y * BigUiWidth + x; // 计算像素索引
+                BigUiImageData[index] = 0x00000000; // 设置为透明（Alpha: 00, Red: 00, Green: 00, Blue: 00）
+            }
+        }
+    }
+    #endif
+    for (int y = 0; y < SmallUiHeight; y++)
+    {
+        for (int x = 0; x < SmallUiWidth; x++)
+        {
+            tmpData = SmallUiImageData[y * SmallUiWidth + x];
+
+            int bigX = startX + x;
+            int bigY = startY + y;
+            if (bigX < BigUiWidth && bigY < BigUiHeight)
+            {
+                BigUiImageData[bigY * BigUiWidth + bigX] = tmpData;
+            }
+        }
+    }
+
+    std::shared_ptr<GpuGraphicBuffer> inputBuffer;
+    std::shared_ptr<GpuGraphicBuffer> outputBuffer;
+    printf("ST_UI_Task\n");
+
+    uint32_t u32UiFormat;
+    u32UiFormat = DRM_FORMAT_ABGR8888;
+    void *pVaddr = nullptr;
+
+    inputBuffer = std::make_shared<GpuGraphicBuffer>(align_width, BigUiHeight, u32UiFormat, align_width * 4);
+    if (!inputBuffer->initCheck()) {
+        printf("Create GpuGraphicBuffer failed\n");
+        return NULL;
+    }
+
+    pVaddr = mmap(NULL, inputBuffer->getBufferSize(), PROT_WRITE|PROT_READ, MAP_SHARED, inputBuffer->getFd(), 0);
+    if(!pVaddr) {
+        printf("Failed to mmap dma buffer\n");
+        return NULL;
+    }
+    memset(pVaddr, 0x00, inputBuffer->getBufferSize());
+
+
+    //memcpy(pVaddr, BigUiImageData, BigUiWidth*BigUiHeight*sizeof(uint32_t));
+    for(int i=0 ;i < BigUiHeight;i++)
+    {
+        memcpy(pVaddr + (i * align_width * 4), (void *)BigUiImageData + (i * BigUiWidth * 4), BigUiWidth*4);
+    }
+
+    ret = g_stdOsdGpuGfx->init(ALIGN_UP(g_stDrmCfg.width,16), g_stDrmCfg.height, u32UiFormat);
+
+    if (ret) {
+        printf("Failed to init gpu graphic effect\n");
+        return NULL;
+    }
+    sstar_reset_osdpointoffset();
+    struct dma_buf_sync dmabufSync;
+    memset(&dmabufSync, 0x00, sizeof(dma_buf_sync));
+    while(g_bThreadExitUiDrm == TRUE)
+    {
+        if(_g_MediaPlayer.video_info.rotate == 1)
+        {
+            g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_90);
+        }
+        else if(_g_MediaPlayer.video_info.rotate == 2)
+        {
+            g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_180);
+        }
+        else if(_g_MediaPlayer.video_info.rotate == 3)
+        {
+            g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_270);
+        }
+        if(!(list_empty(&g_HeadListOsdOutput)))
+        {
+            ListOsdOutput = list_first_entry(&g_HeadListOsdOutput, St_ListOutBufNode_t, list);
+            pthread_mutex_lock(&ListOsdOutput->EntryMutex);
+
+#if 0
+            int dis_count=0;
+            if(dis_count%2)
+            {
+
+                g_stdOsdGpuGfx->cleanBufferCache();
+                for(int i=0 ;i < BigUiHeight;i++)
+                {
+                    memset(pVaddr   + (i * align_width * 4), 0x00, align_width * 4);
+                }
+                dmabufSync.flags = DMA_BUF_SYNC_WRITE | DMA_BUF_SYNC_END;
+                ioctl(inputBuffer->getFd(), DMA_BUF_IOCTL_SYNC, &dmabufSync);
+
+                ret = g_stdOsdGpuGfx->process(inputBuffer, g_RectDisplayRegion, ListOsdOutput->pOutBuffer);
+                if (ret)
+                {
+                    printf("Gpu graphic effect process failed\n");
+                    return NULL;
+                }
+            }
+            else
+            {
+
+                g_stdOsdGpuGfx->cleanBufferCache();
+
+                for(int i=0 ;i < BigUiHeight;i++)
+                {
+                    memset(pVaddr   + (i * align_width * 4), 0xff, align_width * 4);
+                }
+                dmabufSync.flags = DMA_BUF_SYNC_WRITE | DMA_BUF_SYNC_END;
+                ioctl(inputBuffer->getFd(), DMA_BUF_IOCTL_SYNC, &dmabufSync);
+                ret = g_stdOsdGpuGfx->process(inputBuffer, g_RectDisplayRegion, ListOsdOutput->pOutBuffer);
+                if (ret)
+                {
+                    printf("Gpu graphic effect process failed\n");
+                    return NULL;
+                }
+            }
+
+            if(dis_count >= 65535)
+            {
+                dis_count = 0;
+            }
+            else
+            {
+                dis_count++;
+            }
+#endif
+            dmabufSync.flags = DMA_BUF_SYNC_WRITE | DMA_BUF_SYNC_END;
+            ioctl(inputBuffer->getFd(), DMA_BUF_IOCTL_SYNC, &dmabufSync);
+            ret = g_stdOsdGpuGfx->process(inputBuffer, g_RectDisplayRegion, ListOsdOutput->pOutBuffer);
+            if (ret)
+            {
+                printf("Gpu graphic effect process failed\n");
+                return NULL;
+            }
+            outputBuffer = ListOsdOutput->pOutBuffer;
+            list_del(&(ListOsdOutput->list));
+            pthread_mutex_unlock(&ListOsdOutput->EntryMutex);
+            list_add_tail(&ListOsdOutput->list, &g_HeadListOsdCommit);
+            usleep(1000 * 1000);
+
+        }
+        else
+        {
+            //printf("g_HeadListOsdOutput list is empty\n");
+            usleep(60 * 1000);
+        }
+
+
+    }
+
+
+    if(munmap(pVaddr, inputBuffer->getBufferSize()) != 0)
+    {
+        printf("Failed to munmap dma buffer\n");
+    }
+    inputBuffer = nullptr;
+
+    g_stdOsdGpuGfx->deinit();
+
+    return NULL;
 }
 
 static void deinit_queue_buf()
@@ -1689,7 +1998,7 @@ void *ST_SCL_Task(void * arg)
     {
         if(g_bGpuInfoChange_mop == true)
         {
-            STUB_UpdataAllPointOffset();
+            //STUB_UpdataAllPointOffset();
         }
 
         if(!(list_empty(&g_HeadListGpuGfxInput)))
@@ -1747,8 +2056,9 @@ void *ST_SCL_Task(void * arg)
 void *ST_GFX_Task(void * arg)
 {
     MI_S32 s32Ret = MI_SUCCESS;
-    stDmaBuf_t OutputBuf;
-    drm_buf_t drm_buf;
+    St_ListOutBufNode_t *ListVideoOutput;
+    std::shared_ptr<GpuGraphicBuffer> outputBuffer;
+    int ret;
 
     MI_U8  u8SclDev;
     if (g_u8PipelineMode == 0)
@@ -1780,13 +2090,17 @@ void *ST_GFX_Task(void * arg)
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
 
 
-    int ret = g_stdGpuGfx->init(u32Width, u32Height, u32GpuInputFormat);
+    ret = g_stdVideoGpuGfx->init(u32Width, u32Height, u32GpuInputFormat);
     if (ret) {
         printf("Failed to init gpu graphic effect\n");
         return NULL;
     }
 
-    STUB_ResetAllpointOffset();
+    ret = sstar_reset_moppointoffset();
+    if(ret != 0)
+    {
+        printf("sstar_reset_pointoffset fail,ret=%d \n",ret);
+    }
 
     struct timeval tv;
     MI_S32 s32FdSclPort0 = -1;
@@ -1866,42 +2180,36 @@ void *ST_GFX_Task(void * arg)
                 continue;
             }
 
-            int ret = g_stdGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion, GfxOutputBuffer);
-            if (ret) {
-                printf("Gpu graphic effect process failed\n");
-            }
-
-            pthread_mutex_unlock(&GfxReadListNode->EntryMutex);
-            list_add_tail(&GfxReadListNode->list, &g_HeadListGpuGfxInput);
-
-            OutputBuf.width   = GfxOutputBuffer->getWidth();
-            OutputBuf.height  = GfxOutputBuffer->getHeight();
-            OutputBuf.format  = E_STREAM_YUV420;
-            OutputBuf.fds[0]  = GfxOutputBuffer->getFd();
-            OutputBuf.fds[1]  = GfxOutputBuffer->getFd();
-            OutputBuf.stride[0] = GfxOutputBuffer->getWidth();
-            OutputBuf.stride[1] = GfxOutputBuffer->getWidth();
-            OutputBuf.dataOffset[0] = 0;
-            OutputBuf.dataOffset[1] = OutputBuf.width * OutputBuf.height;
-            OutputBuf.priavte = (void *)&drm_buf;
-#if 0
-            s32Ret = AddDmabufToDRM(&OutputBuf);
-            if (s32Ret != 0)
+            if(!(list_empty(&g_HeadListVideoOutput)))
             {
-                //printf("AddDmabufToDRM:%d\n", s32Ret);
+                ListVideoOutput = list_first_entry(&g_HeadListVideoOutput, St_ListOutBufNode_t, list);
+                pthread_mutex_lock(&ListVideoOutput->EntryMutex);
+                ret = g_stdVideoGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion, ListVideoOutput->pOutBuffer);
+
+                if (ret) {
+                    printf("Gpu graphic effect process failed\n");
+                    pthread_mutex_unlock(&GfxReadListNode->EntryMutex);
+                    pthread_mutex_unlock(&ListVideoOutput->EntryMutex);
+                    continue;
+                }
+
+                pthread_mutex_unlock(&GfxReadListNode->EntryMutex);
+                list_add_tail(&GfxReadListNode->list, &g_HeadListGpuGfxInput);
+                list_del(&(ListVideoOutput->list));
+                pthread_mutex_unlock(&ListVideoOutput->EntryMutex);
+
+                list_add_tail(&ListVideoOutput->list, &g_HeadListVideoCommit);
+
             }
-            atomic_set_plane(MOPG_ID0, drm_buf.fb_id, 0);
-            drm_free_gem_handle(&prev_mop_gem_handle);
-            prev_mop_gem_handle.first = drm_buf.fb_id;
-            prev_mop_gem_handle.second = drm_buf.gem_handle[0];
-
-#endif
-            sstar_drm_update(&OutputBuf, MOPG_ID0);
-
+            else
+            {
+                //printf("g_HeadListVideoOutput list is empty\n");
+                usleep(10 * 1000);
+            }
 
         }
     }
-    g_stdGpuGfx->deinit();
+    g_stdVideoGpuGfx->deinit();
     MI_SYS_CloseFd(s32FdSclPort0);
     FD_ZERO(&ReadFdsSclPort0);
 
@@ -1916,7 +2224,6 @@ static void * sstar_player_thread(void *args)
     char     IqApiBinFilePath[128];
     strcpy(IqApiBinFilePath, g_InputFile);
 
-    //_g_MediaPlayer.player_working = true;
     while (g_bThreadExitPlayer == TRUE) {
         ret = mm_player_get_status();
         if (ret < 0) {
@@ -2001,6 +2308,10 @@ static void * sstar_video_thread(void * arg)
                 stSclBufConf.stFrameCfg.u16Width = frame_info.width;
                 stSclBufConf.stFrameCfg.u16Height = frame_info.height;
 
+                _g_MediaPlayer.video_info.out_width = frame_info.width;
+                _g_MediaPlayer.video_info.out_height = frame_info.height;
+
+                //printf("width=%d height=%d\n",frame_info.width,frame_info.height);
 
                 ret = MI_SYS_ChnInputPortGetBuf(&stSclChnInput,&stSclBufConf,&stSclBufInfo,&hSclHandle,0);
                 if(ret !=0 )
@@ -2198,12 +2509,6 @@ static MI_S32 STUB_PipelineMode1Init()
 {
     int ret;
 
-    ret = init_queue_buf();
-    if (ret < 0)
-    {
-        printf("mm_player_open fail \n");
-        return -1;
-    }
 
     sstar_player_init();
     sstar_scl_init();
@@ -2323,6 +2628,7 @@ static MI_S32 STUB_PipelineMode1Deinit()
 
 static MI_S32 STUB_BaseModuleInit()
 {
+    int ret;
     /************************************************
     step :init SYS
     *************************************************/
@@ -2347,11 +2653,22 @@ static MI_S32 STUB_BaseModuleInit()
     //***********************************************
     //end init sys
 
+    ret = init_queue_buf();
+    if (ret < 0)
+    {
+        printf("init_queue_buf fail \n");
+        return -1;
+    }
+
+
     g_RectDisplayRegion.left = 0;
     g_RectDisplayRegion.top = 0;
     g_RectDisplayRegion.right = ALIGN_UP(g_stDrmCfg.width,16);
     g_RectDisplayRegion.bottom = g_stDrmCfg.height;
 
+    pthread_create(&g_pThreadUpdatePoint, NULL, sstar_update_pointoffset_thread, NULL);
+
+    pthread_create(&g_pThreadCommit, NULL, sstar_commit_thread, NULL);
 
     if(bShowUi)
     {
@@ -2380,6 +2697,19 @@ static MI_S32 STUB_BaseModuleDeinit()
     if(g_pThreadScl)
     {
         pthread_join(g_pThreadScl, NULL);
+    }
+
+    g_bThreadExitUpdatePoint = false;
+    if(g_pThreadUpdatePoint)
+    {
+        pthread_join(g_pThreadUpdatePoint, NULL);
+    }
+
+
+    g_bThreadExitCommit = false;
+    if(g_pThreadCommit)
+    {
+        pthread_join(g_pThreadCommit, NULL);
     }
 
     g_bThreadExitGfx = false;
@@ -2516,141 +2846,147 @@ void STUB_Common_Pause(void)
     printf("press q to exit\n");
     while ((ch = getchar()) != 'q')
     {
-        if(ch == 'q')
-        {
-            break;
-        }
-        if(ch == 'a')
-        {
-            printf("======== GpuLT[+] =======\n");
-            if((g_u32GpuLT_X + 10 >= u16GpuMaxW) || (g_u32GpuLT_Y + 10 >= u16GpuMaxH))
-            {
-                printf("Set Gpu PointOffse Fail, the PointOffse can not More than disp w/3 h/3 !!!\n");
-            }
-            else
-            {
-                    g_u32GpuLT_X = g_u32GpuLT_X + 10;
-                    g_u32GpuLT_Y = g_u32GpuLT_Y + 10;
-                    g_bGpuInfoChange_mop = true;
-                    g_bGpuUifresh = true;
-            }
-        }
-        if(ch == 'b')
-        {
-            printf("======== GpuLT[-] =======\n");
-            if(g_u32GpuLT_X < 10)
-            {
-                g_u32GpuLT_X = 0;
-                g_u32GpuLT_Y = 0;
-                printf("Set Gpu PointOffse Fail, the PointOffse can not Less than zero !!!\n");
-            }
-            else
-            {
-                g_u32GpuLT_X = g_u32GpuLT_X - 10;
-                g_u32GpuLT_Y = g_u32GpuLT_Y - 10;
-                g_bGpuInfoChange_mop = true;
-                g_bGpuUifresh = true;
-            }
-        }
-        if(ch == 'c')
-        {
-            printf("======== GpuLB[+] =======\n");
-            if((g_u32GpuLB_X + 10 >= u16GpuMaxW) || (g_u32GpuLB_Y + 10 >= u16GpuMaxH))
-            {
-                printf("Set Gpu PointOffse Fail, the PointOffse can not More than disp w/3 h/3 !!!\n");
-            }
-            else
-            {
-                    g_u32GpuLB_X = g_u32GpuLB_X + 10;
-                    g_u32GpuLB_Y = g_u32GpuLB_Y + 10;
-                    g_bGpuInfoChange_mop = true;
-                    g_bGpuUifresh = true;
-            }
-        }
-        if(ch == 'd')
-        {
-            printf("======== GpuLB[-] =======\n");
-            if(g_u32GpuLB_X < 10)
-            {
-                g_u32GpuLB_X = 0;
-                g_u32GpuLB_Y = 0;
-                printf("Set Gpu PointOffse Fail, the PointOffse can not Less than zero !!!\n");
-            }
-            else
-            {
-                g_u32GpuLB_X = g_u32GpuLB_X - 10;
-                g_u32GpuLB_Y = g_u32GpuLB_Y - 10;
-                g_bGpuInfoChange_mop = true;
-                g_bGpuUifresh = true;
-            }
-        }
-        if(ch == 'e')
-        {
-            printf("======== GpuRT[+] =======\n");
-            if((g_u32GpuRT_X + 10 >= u16GpuMaxW) || (g_u32GpuRT_Y + 10 >= u16GpuMaxH))
-            {
-                printf("Set Gpu PointOffse Fail, the PointOffse can not More than disp w/3 h/3 !!!\n");
-            }
-            else
-            {
-                    g_u32GpuRT_X = g_u32GpuRT_X + 10;
-                    g_u32GpuRT_Y = g_u32GpuRT_Y + 10;
-                    g_bGpuInfoChange_mop = true;
-                    g_bGpuUifresh = true;
-            }
-        }
-        if(ch == 'f')
-        {
-            printf("======== GpuRT[-] =======\n");
-            if(g_u32GpuRT_X < 10)
-            {
-                g_u32GpuRT_X = 0;
-                g_u32GpuRT_Y = 0;
-                printf("Set Gpu PointOffse Fail, the PointOffse can not Less than zero !!!\n");
-            }
-            else
-            {
-                g_u32GpuRT_X = g_u32GpuRT_X - 10;
-                g_u32GpuRT_Y = g_u32GpuRT_Y - 10;
-                g_bGpuInfoChange_mop = true;
-                g_bGpuUifresh = true;
-            }
-        }
-        if(ch == 'g')
-        {
-            printf("======== GpuRB[+] =======\n");
-            if((g_u32GpuRB_X + 10 >= u16GpuMaxW) || (g_u32GpuRB_Y + 10 >= u16GpuMaxH))
-            {
-                printf("Set Gpu PointOffse Fail, the PointOffse can not More than disp w/3 h/3 !!!\n");
-            }
-            else
-            {
-                    g_u32GpuRB_X = g_u32GpuRB_X + 10;
-                    g_u32GpuRB_Y = g_u32GpuRB_Y + 10;
-                    g_bGpuInfoChange_mop = true;
-                    g_bGpuUifresh = true;
-            }
-        }
-        if(ch == 'h')
-        {
-            printf("======== GpuRB[-] =======\n");
-            if(g_u32GpuRB_X < 10)
-            {
-                g_u32GpuRB_X = 0;
-                g_u32GpuRB_Y = 0;
-                printf("Set Gpu PointOffse Fail, the PointOffse can not Less than zero !!!\n");
-            }
-            else
-            {
-                g_u32GpuRB_X = g_u32GpuRB_X - 10;
-                g_u32GpuRB_Y = g_u32GpuRB_Y - 10;
-                g_bGpuInfoChange_mop = true;
-                g_bGpuUifresh = true;
-            }
-        }
 
+        switch(ch)
+        {
+            case 'a':
+                printf("======== GpuLT[+] =======\n");
+                if((g_u32GpuLT_X + 10 >= u16GpuMaxW) || (g_u32GpuLT_Y + 10 >= u16GpuMaxH))
+                {
+                    printf("Set Gpu PointOffse Fail, the PointOffse can not More than disp w/3 h/3 !!!\n");
+                }
+                else
+                {
+                        g_u32GpuLT_X = g_u32GpuLT_X + 10;
+                        g_u32GpuLT_Y = g_u32GpuLT_Y + 10;
+                        g_bChangePointOffset = true;
+                }
+                break;
+            case 'b':
+                {
+                    printf("======== GpuLT[-] =======\n");
+                    if(g_u32GpuLT_X < 10)
+                    {
+                        g_u32GpuLT_X = 0;
+                        g_u32GpuLT_Y = 0;
+                        printf("Set Gpu PointOffse Fail, the PointOffse can not Less than zero !!!\n");
+                    }
+                    else
+                    {
+                        g_u32GpuLT_X = g_u32GpuLT_X - 10;
+                        g_u32GpuLT_Y = g_u32GpuLT_Y - 10;
+                        g_bChangePointOffset = true;
+                    }
+                }
+
+                break;
+
+            case 'c':
+                {
+                    printf("======== GpuLB[+] =======\n");
+                    if((g_u32GpuLB_X + 10 >= u16GpuMaxW) || (g_u32GpuLB_Y + 10 >= u16GpuMaxH))
+                    {
+                        printf("Set Gpu PointOffse Fail, the PointOffse can not More than disp w/3 h/3 !!!\n");
+                    }
+                    else
+                    {
+                            g_u32GpuLB_X = g_u32GpuLB_X + 10;
+                            g_u32GpuLB_Y = g_u32GpuLB_Y + 10;
+                            g_bChangePointOffset = true;
+                    }
+                }
+
+                break;
+            case 'd':
+                {
+                    printf("======== GpuLB[-] =======\n");
+                    if(g_u32GpuLB_X < 10)
+                    {
+                        g_u32GpuLB_X = 0;
+                        g_u32GpuLB_Y = 0;
+                        printf("Set Gpu PointOffse Fail, the PointOffse can not Less than zero !!!\n");
+                    }
+                    else
+                    {
+                        g_u32GpuLB_X = g_u32GpuLB_X - 10;
+                        g_u32GpuLB_Y = g_u32GpuLB_Y - 10;
+                        g_bChangePointOffset = true;
+                    }
+                }
+
+                break;
+            case 'e':
+                {
+                    printf("======== GpuRT[+] =======\n");
+                    if((g_u32GpuRT_X + 10 >= u16GpuMaxW) || (g_u32GpuRT_Y + 10 >= u16GpuMaxH))
+                    {
+                        printf("Set Gpu PointOffse Fail, the PointOffse can not More than disp w/3 h/3 !!!\n");
+                    }
+                    else
+                    {
+                            g_u32GpuRT_X = g_u32GpuRT_X + 10;
+                            g_u32GpuRT_Y = g_u32GpuRT_Y + 10;
+                            g_bChangePointOffset = true;
+                    }
+                }
+
+                break;
+            case 'f':
+                {
+                    printf("======== GpuRT[-] =======\n");
+                    if(g_u32GpuRT_X < 10)
+                    {
+                        g_u32GpuRT_X = 0;
+                        g_u32GpuRT_Y = 0;
+                        printf("Set Gpu PointOffse Fail, the PointOffse can not Less than zero !!!\n");
+                    }
+                    else
+                    {
+                        g_u32GpuRT_X = g_u32GpuRT_X - 10;
+                        g_u32GpuRT_Y = g_u32GpuRT_Y - 10;
+                        g_bChangePointOffset = true;
+                    }
+                }
+
+                break;
+
+            case 'g':
+                {
+                    printf("======== GpuRB[+] =======\n");
+                    if((g_u32GpuRB_X + 10 >= u16GpuMaxW) || (g_u32GpuRB_Y + 10 >= u16GpuMaxH))
+                    {
+                        printf("Set Gpu PointOffse Fail, the PointOffse can not More than disp w/3 h/3 !!!\n");
+                    }
+                    else
+                    {
+                            g_u32GpuRB_X = g_u32GpuRB_X + 10;
+                            g_u32GpuRB_Y = g_u32GpuRB_Y + 10;
+                            g_bChangePointOffset = true;
+                    }
+                }
+
+                break;
+            case 'h':
+                {
+                    printf("======== GpuRB[-] =======\n");
+                    if(g_u32GpuRB_X < 10)
+                    {
+                        g_u32GpuRB_X = 0;
+                        g_u32GpuRB_Y = 0;
+                        printf("Set Gpu PointOffse Fail, the PointOffse can not Less than zero !!!\n");
+                    }
+                    else
+                    {
+                        g_u32GpuRB_X = g_u32GpuRB_X - 10;
+                        g_u32GpuRB_Y = g_u32GpuRB_Y - 10;
+                        g_bChangePointOffset = true;
+                    }
+                }
+                break;
+        }
         printf("press q to exit\n");
         usleep(10 * 1000);
+        continue;
     }
 }
 
