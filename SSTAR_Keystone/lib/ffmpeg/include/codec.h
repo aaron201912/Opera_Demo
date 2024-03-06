@@ -197,6 +197,49 @@ struct AVSubtitle;
 struct AVPacket;
 
 /**
+ * AVCodec sequence info.
+ * < only used for hard decoding >
+ */
+typedef struct AVCodecSeqInfo {
+    uint8_t ref_frame_num;
+    int     pic_width;
+    int     pic_height;
+    int     crop_x;
+    int     crop_y;
+    int     crop_width;
+    int     crop_height;
+} AVCodecSeqInfo;
+
+/**
+ * AVCodec event info.
+ * < only used for hard decoding >
+ */
+typedef struct AVCodecEventInfo {
+    int event;
+    int dev;
+    int chn;
+    AVCodecSeqInfo seq_info;
+} AVCodecEventInfo;
+
+/**
+ * AVCodec frame info with crop info.
+ * < only used for hard decoding >
+ */
+typedef struct AVCodecFrameInfo {
+    int buf_fd;
+
+    /* output frame wh with garbage */
+    int width;
+    int height;
+
+    /* output frame crop info */
+    int crop_top;
+    int crop_bottom;
+    int crop_left;
+    int crop_right;
+} AVCodecFrameInfo;
+
+/**
  * AVCodec.
  */
 typedef struct AVCodec {
@@ -356,6 +399,7 @@ typedef struct AVCodec {
     const uint32_t *codec_tags;
 
     int (*set_codec_size)(struct AVCodecContext *avctx, int width, int height);
+    int (*register_event_cb)(struct AVCodecContext *avctx, void (*event_handle)(AVCodecEventInfo *event_info));
 } AVCodec;
 
 /**

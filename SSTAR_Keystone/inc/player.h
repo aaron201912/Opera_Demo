@@ -38,6 +38,7 @@ extern "C"{
 #define AV_PLAY_LOOP        (0x0800)
 #define AV_VIDEO_OVER_SPEC  (0x1000)
 #define AV_AUDIO_OVER_SPEC  (0x2000)
+#define AV_RUNNING          (0x4000)
 
 #define AV_PLAY_COMPLETE    (AV_AUDIO_COMPLETE | AV_VIDEO_COMPLETE)
 #define AV_PLAY_ERROR       (AV_ACODEC_ERROR | AV_VCODEC_ERROR | AV_NOSYNC | AV_READ_TIMEOUT | AV_NO_NETWORK | AV_INVALID_FILE)
@@ -157,6 +158,10 @@ typedef struct player_info_s {
     int         video_width;
     int         video_height;
 
+    /* If video es isn't annex-b, user maybe set it to decoder */
+    uint8_t     *extradata;
+    int         extradata_size;
+
     /* For airplay protocol, video decoder output size info.
      * User need to calculate the final video output size based on video size and panel size
      */
@@ -167,12 +172,16 @@ typedef struct player_info_s {
     int         codec_type;
     bool        bframe;
 
+    /* For airplay protocol, video frame rate. if frame_rate=30*1000, it means 30FPS */
+    int         frame_rate;
+
     /* For airplay protocol, input audio frame info, set by user.
      * Such as: sample_rate=48K channels=2 format=S16, maybe need to resample.
      */
     int         sample_rate;
     int         channels;
     int         format;
+    int         nb_samples;
 
     /* For miracast protocol, register read_packet callback to ffmpeg */
     void        * opaque;
@@ -313,7 +322,7 @@ int mm_player_get_video_frame(frame_info_t *frame_info);
 /**
  * User put back a video frame to player, and must be paired with the mm_player_get_video_frame function.
  */
-int mm_player_put_video_frame(void);
+int mm_player_put_video_frame(frame_info_t *frame_info);
 
 /**
  * This function is a blocking function, with a value equal to 0 indicating success in getting a frame
@@ -335,7 +344,7 @@ int mm_player_get_audio_frame(frame_info_t *frame_info);
 /**
  * User put back a audio frame to player, and must be paired with the mm_player_get_audio_frame function.
  */
-int mm_player_put_audio_frame(void);
+int mm_player_put_audio_frame(frame_info_t *frame_info);
 
 /* register event callback function
  * h26x hard decoding event type:
@@ -351,6 +360,12 @@ int mm_player_put_audio_frame(void);
  *
  */
 int mm_player_register_event_cb(void (*event_handler)(event_info_t *event_info));
+
+/* Send video data to decoder, and send audio data to output device.
+ * timestamp: video or audio pts
+ * media_type: AV_MEDIA_TYPE_AUDIO/AV_MEDIA_TYPE_VIDEO
+ */
+int mm_player_send_stream(const uint8_t *buffer, int size, int64_t timestamp, int media_type);
 
 
 #ifdef __cplusplus
