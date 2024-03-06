@@ -54,7 +54,6 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 #include "mi_hvp.h"
 #include "mi_hvp_datatype.h"
 #include "mi_scl.h"
-#include <linux/dma-buf.h>
 
 
 #define VEDIO_WIDTH     1920
@@ -1589,6 +1588,8 @@ void *sstar_update_pointoffset_thread(void * arg)
             continue;
         }
     }
+    printf("EXIT sstar_update_pointoffset_thread \n");
+    return NULL;
 }
 #define DUMP_OPTION
 FILE* open_dump_file(char *path)
@@ -1637,7 +1638,6 @@ void close_dump_file(FILE *fd)
     }
 #endif
 }
-static int dump_count ;
 
 void *sstar_commit_thread(void * arg)
 {
@@ -1759,6 +1759,7 @@ void *sstar_commit_thread(void * arg)
     }
 
     printf("sstar_commit_thread exit\n");
+    return NULL;
 }
 
 
@@ -1848,23 +1849,14 @@ void *ST_UI_Task(void * arg)
         return NULL;
     }
 
-    #if 1
-    pVaddr = mmap(NULL, inputBuffer->getBufferSize(), PROT_WRITE|PROT_READ, MAP_SHARED, inputBuffer->getFd(), 0);
-    if(!pVaddr) {
-        printf("Failed to mmap dma buffer\n");
-        return NULL;
-    }
-    #else
     pVaddr = inputBuffer->map(READWRITE);
     if(!pVaddr) {
         printf("Failed to mmap dma buffer\n");
         return NULL;
     }
-    #endif
+
     memset(pVaddr, 0x00, inputBuffer->getBufferSize());
 
-
-    //memcpy(pVaddr, BigUiImageData, BigUiWidth*BigUiHeight*sizeof(uint32_t));
     for(int i=0 ;i < BigUiHeight;i++)
     {
         memcpy(pVaddr + (i * align_width * 4), (void *)BigUiImageData + (i * BigUiWidth * 4), BigUiWidth*4);
@@ -1877,8 +1869,7 @@ void *ST_UI_Task(void * arg)
         return NULL;
     }
     sstar_reset_osdpointoffset();
-    struct dma_buf_sync dmabufSync;
-    memset(&dmabufSync, 0x00, sizeof(dma_buf_sync));
+
     while(g_bThreadExitUiDrm == TRUE)
     {
 #if 1
@@ -1910,8 +1901,7 @@ void *ST_UI_Task(void * arg)
                 {
                     memset(pVaddr   + (i * align_width * 4), 0x00, align_width * 4);
                 }
-                dmabufSync.flags = DMA_BUF_SYNC_WRITE | DMA_BUF_SYNC_END;
-                ioctl(inputBuffer->getFd(), DMA_BUF_IOCTL_SYNC, &dmabufSync);
+                inputBuffer->flushCache(READWRITE);
 
                 ret = g_stdOsdGpuGfx->process(inputBuffer, g_RectDisplayRegion, ListOsdOutput->pOutBuffer);
                 if (ret)
@@ -1929,8 +1919,7 @@ void *ST_UI_Task(void * arg)
                 {
                     memset(pVaddr   + (i * align_width * 4), 0xff, align_width * 4);
                 }
-                dmabufSync.flags = DMA_BUF_SYNC_WRITE | DMA_BUF_SYNC_END;
-                ioctl(inputBuffer->getFd(), DMA_BUF_IOCTL_SYNC, &dmabufSync);
+                inputBuffer->flushCache(READWRITE);
                 ret = g_stdOsdGpuGfx->process(inputBuffer, g_RectDisplayRegion, ListOsdOutput->pOutBuffer);
                 if (ret)
                 {
@@ -1948,12 +1937,8 @@ void *ST_UI_Task(void * arg)
                 dis_count++;
             }
 #endif
-            dmabufSync.flags = DMA_BUF_SYNC_WRITE | DMA_BUF_SYNC_END;
-            ioctl(inputBuffer->getFd(), DMA_BUF_IOCTL_SYNC, &dmabufSync);
-            #if 0
 
             inputBuffer->flushCache(READWRITE);
-            #endif
             ret = g_stdOsdGpuGfx->process(inputBuffer, g_RectDisplayRegion, ListOsdOutput->pOutBuffer);
             if (ret)
             {
@@ -1964,7 +1949,7 @@ void *ST_UI_Task(void * arg)
             list_del(&(ListOsdOutput->list));
             pthread_mutex_unlock(&ListOsdOutput->EntryMutex);
             list_add_tail(&ListOsdOutput->list, &g_HeadListOsdCommit);
-            usleep(33 * 1000);
+            usleep(1000 * 1000);
 
         }
         else
@@ -1975,16 +1960,7 @@ void *ST_UI_Task(void * arg)
 
 
     }
-    #if 0
-
     inputBuffer->unmap(pVaddr, READWRITE);
-
-    #else
-    if(munmap(pVaddr, inputBuffer->getBufferSize()) != 0)
-    {
-        printf("Failed to munmap dma buffer\n");
-    }
-    #endif
     inputBuffer = nullptr;
 
     g_stdOsdGpuGfx->deinit();

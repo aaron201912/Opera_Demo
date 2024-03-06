@@ -64,6 +64,12 @@ typedef struct {
     uint32_t dataOffset[3];
 } GraphicBuffer;
 
+enum CpuAccess {
+    READ,
+    WRITE,
+    READWRITE,
+};
+
 class GpuGraphicBuffer {
   public:
     GpuGraphicBuffer() = delete;
@@ -77,6 +83,9 @@ class GpuGraphicBuffer {
     uint32_t getFormat() const          { return mFormat; }
     uint32_t getFd() const              { return mFd; }
     uint32_t getBufferSize() const      { return mSize; }
+    void *map(CpuAccess access);
+    void flushCache(CpuAccess access);
+    void unmap(void *virAddr, CpuAccess access);
 
   private:
     bool initWithSize(uint32_t inWidth, uint32_t inHeight, uint32_t inFormat, uint32_t inStride);
