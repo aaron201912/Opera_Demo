@@ -74,29 +74,33 @@ class GpuGraphicBuffer {
   public:
     GpuGraphicBuffer() = delete;
     GpuGraphicBuffer(uint32_t inWidth, uint32_t inHeight, uint32_t inFormat, uint32_t inStride);
-    GpuGraphicBuffer(int32_t inFd, uint32_t inWidth, uint32_t inHeight, uint32_t inFormat, uint32_t inStride);
+    GpuGraphicBuffer(int32_t inFd, uint32_t inWidth, uint32_t inHeight, uint32_t inFormat,
+                     uint32_t *inStride, uint32_t *inPlaneOffset);
     ~GpuGraphicBuffer();
     bool initCheck() const              { return mInitCheck; }
     uint32_t getWidth() const           { return mWidth; }
     uint32_t getHeight() const          { return mHeight; }
-    uint32_t getStride() const          { return mStride; }
     uint32_t getFormat() const          { return mFormat; }
     uint32_t getFd() const              { return mFd; }
     uint32_t getBufferSize() const      { return mSize; }
+    uint32_t *getStride()               { return mStride; }
+    uint32_t *getPlaneOffset()          { return mPlaneOffset; }
     void *map(CpuAccess access);
     void flushCache(CpuAccess access);
     void unmap(void *virAddr, CpuAccess access);
 
   private:
     bool initWithSize(uint32_t inWidth, uint32_t inHeight, uint32_t inFormat, uint32_t inStride);
-    bool initWithFd(int32_t inFd, uint32_t inWidth, uint32_t inHeight, uint32_t inFormat, uint32_t inStride);
+    bool initWithFd(int32_t inFd, uint32_t inWidth, uint32_t inHeight, uint32_t inFormat,
+                    uint32_t *inStride, uint32_t *inPlaneOffset);
 
     bool mInitCheck;
     uint32_t mWidth;
     uint32_t mHeight;
     uint32_t mSize;
     uint32_t mFormat;
-    uint32_t mStride;
+    uint32_t mStride[3];
+    uint32_t mPlaneOffset[3];
     int32_t mFd;
 };
 

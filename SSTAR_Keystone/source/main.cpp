@@ -13,7 +13,7 @@ Information is unlawful and strictly prohibited. SigmaStar hereby reserves the
 rights to any and all damages, losses, costs and expenses resulting therefrom.
 */
 
-#include <gpu_graphic_effect.h>
+
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -54,11 +54,18 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 #include "mi_hvp.h"
 #include "mi_hvp_datatype.h"
 #include "mi_scl.h"
+#include <gpu_graphic_effect.h>
+#include <sstar_drm.h>
 
 
 #define VEDIO_WIDTH     1920
 #define VEDIO_HEIGHT    1080
 
+//#define DUMP_OPTION
+
+#ifdef DUMP_OPTION
+static int g_dump_count;
+#endif
 
 typedef struct video_info_s {
     seq_info_t seq_info; // current stream sequence info, get seq info by callback function
@@ -104,10 +111,22 @@ typedef struct player_obj_s {
     video_info_t video_info;
     ui_info_t ui_info;
     player_info_t param;
+    int rotate;
 } media_player_t;
+
+typedef struct hdmirx_obj_s {
+    MI_SYS_ChnPort_t stHvpChnPort;
+    MI_SYS_ChnPort_t stSclChnPort;
+    MI_SYS_BindType_e eBindType;
+    int hvpFrameRate;
+    int sclFrameRate;
+} hdmirx_player_t;
+
 
 
 static media_player_t _g_MediaPlayer;
+static hdmirx_player_t _g_HdmiRxPlayer;
+
 
 #define ALIGN_BACK(x, a)            (((x) / (a)) * (a))
 #define ALIGN_UP(x, a)            (((x+a-1) / (a)) * (a))
@@ -382,9 +401,6 @@ MI_BOOL g_bThreadExitUpdatePoint = TRUE;
 pthread_t g_player_thread;
 MI_BOOL g_bThreadExitPlayer = TRUE;
 
-pthread_t g_video_thread;
-MI_BOOL g_bThreadExitVideo = TRUE;
-
 
 MI_U32 g_u32GpuLT_X, g_u32GpuLT_Y;
 MI_U32 g_u32GpuLB_X, g_u32GpuLB_Y;
@@ -396,19 +412,18 @@ MI_BOOL g_bGpuUifresh = false;
 
 MI_BOOL g_bChangePointOffset = false;
 
-MI_U32 g_u32SclBufferCnt = 0;
-
-
 std::pair<uint32_t, uint32_t> prev_gop_gem_handle(static_cast<uint32_t>(-1), static_cast<uint32_t>(-1));
 std::pair<uint32_t, uint32_t> prev_mop_gem_handle(static_cast<uint32_t>(-1), static_cast<uint32_t>(-1));
 
 
-std::shared_ptr<GpuGraphicEffect> g_stdOsdGpuGfx = std::make_shared<GpuGraphicEffect>();
-std::shared_ptr<GpuGraphicEffect> g_stdVideoGpuGfx = std::make_shared<GpuGraphicEffect>();
+std::shared_ptr<GpuGraphicEffect> g_stdOsdGpuGfx;
+std::shared_ptr<GpuGraphicEffect> g_stdVideoGpuGfx;
+std::shared_ptr<GpuGraphicEffect> g_stdHdmiRxGpuGfx;
+
 Rect g_RectDisplayRegion;
 
+LIST_HEAD(g_HeadListSclOutput);
 LIST_HEAD(g_HeadListGpuGfxInput);
-LIST_HEAD(g_HeadListGpuGfxOutput);
 
 
 LIST_HEAD(g_HeadListOsdOutput);
@@ -494,6 +509,119 @@ static  MI_U8 HDCP_KEY[289] =
     0xE3,0x50,0x9A,0x03,0x88,0xEE,0x21,
     0xD8,0x53,0x6A,0x9F,0x31,0xB5,0x88,
 };
+
+typedef struct St_Csc_s
+{
+    drm_sstar_csc_matrix_type eCscMatrix;
+    MI_U32 u32Luma;                     /* luminance:   0 ~ 100 default: 50 */
+    MI_U32 u32Contrast;                 /* contrast :   0 ~ 100 default: 50 */
+    MI_U32 u32Hue;                      /* hue      :   0 ~ 100 default: 50 */
+    MI_U32 u32Saturation;               /* saturation:  0 ~ 100 default: 50 */
+    MI_U32 u32Gain;                     /* current gain of VGA signals. [0, 64). default:0x30 */
+    MI_U32 u32Sharpness;
+
+} St_Csc_t;
+
+MI_S32 sstar_set_pictureQuality(St_Csc_t picQuality)
+{
+    struct drm_sstar_picture_quality pictureQuality;
+
+    pictureQuality.op = SSTAR_OP_SET;
+    pictureQuality.csc.onlySetCsc = 0;
+    pictureQuality.csc.cscMatrix = SSTAR_CSC_MATRIX_USER;
+    pictureQuality.connectorId = g_stDrmCfg.conn_id;
+    pictureQuality.crtcId = g_stDrmCfg.crtc_id;
+    pictureQuality.csc.luma = picQuality.u32Luma;
+    pictureQuality.csc.contrast = picQuality.u32Contrast;
+    pictureQuality.csc.saturation = picQuality.u32Saturation;
+    pictureQuality.sharpness = picQuality.u32Sharpness;
+    pictureQuality.csc.hue = picQuality.u32Hue;
+    pictureQuality.gain = picQuality.u32Gain;
+    int32_t ret = drmIoctl(g_stDrmCfg.fd, DRM_IOCTL_SSTAR_PICTURE_QUALITY, &pictureQuality);
+    if (ret < 0) {
+        printf("sstar_set_pictureQuality error\n");
+        return -1;
+    }
+    printf("set:luma=%d contrast=%d saturation=%d sharpness=%d\n",pictureQuality.csc.luma, pictureQuality.csc.contrast, pictureQuality.csc.saturation, pictureQuality.sharpness);
+    return MI_SUCCESS;
+
+}
+
+MI_S32 sstar_get_pictureQuality(St_Csc_t *picQuality)
+{
+    struct drm_sstar_picture_quality pictureQuality;
+    memset(&pictureQuality, 0x00, sizeof(drm_sstar_picture_quality));
+    pictureQuality.op = SSTAR_OP_GET;
+    pictureQuality.connectorId = g_stDrmCfg.conn_id;
+    pictureQuality.crtcId = g_stDrmCfg.crtc_id;
+
+    int32_t ret = drmIoctl(g_stDrmCfg.fd, DRM_IOCTL_SSTAR_PICTURE_QUALITY, &pictureQuality);
+    if (ret < 0) {
+        printf("sstar_get_pictureQuality error\n");
+        return -1;
+    }
+    picQuality->u32Gain = pictureQuality.gain;
+    picQuality->u32Luma = pictureQuality.csc.luma;
+    picQuality->u32Contrast = pictureQuality.csc.contrast;
+    picQuality->u32Saturation = pictureQuality.csc.saturation;
+    picQuality->u32Sharpness = pictureQuality.sharpness;
+    picQuality->u32Hue = pictureQuality.csc.hue;
+    picQuality->eCscMatrix = pictureQuality.csc.cscMatrix;
+
+    printf("get:luma=%d contrast=%d saturation=%d sharpness=%d\n",pictureQuality.csc.luma, pictureQuality.csc.contrast, pictureQuality.csc.saturation, pictureQuality.sharpness);
+    return MI_SUCCESS;
+}
+
+
+St_Csc_t g_picQuality;
+
+
+FILE* open_dump_file(char *path)
+{
+#ifdef DUMP_OPTION
+    FILE *out_fd = NULL;
+
+    char file_out[128];
+    memset(file_out, '\0', sizeof(file_out));
+    sprintf(file_out, path);
+
+    if(out_fd == NULL)
+    {
+        out_fd = fopen(file_out, "awb");
+        if (!out_fd)
+        {
+            printf("fopen %s falied!\n", file_out);
+            fclose(out_fd);
+            out_fd = NULL;
+        }
+    }
+    return out_fd;
+#else
+    return NULL;
+#endif
+}
+
+void wirte_dump_file(FILE *fd, char *p_viraddr, int len)
+{
+#ifdef DUMP_OPTION
+    printf("write len=%d \n",len);
+    if(fd && p_viraddr && len > 0)
+    {
+        fwrite(p_viraddr, len, 1, fd);
+    }
+#endif
+}
+
+void close_dump_file(FILE *fd)
+{
+#ifdef DUMP_OPTION
+    if(fd)
+    {
+        fclose(fd);
+        fd = NULL;
+    }
+#endif
+}
 
 static int signal_monitor_sync_hdmi_paramter_2_hvp(const MI_HDMIRX_TimingInfo_t *pstTimingInfo)
 {
@@ -859,8 +987,6 @@ static int drm_free_gem_handle(std::pair<uint32_t, uint32_t> *gem_handle) {
     return 0;
 }
 
-
-
 static int atomic_set_plane(int osd_fb_id, int video_fb_id, int is_realtime) {
     int ret;
     drmModeAtomicReqPtr req;
@@ -896,10 +1022,10 @@ static int atomic_set_plane(int osd_fb_id, int video_fb_id, int is_realtime) {
         add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_Y, 0);
         add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_W,  g_stDrmCfg.width);
         add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_H,  g_stDrmCfg.height);
-        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_X, _g_MediaPlayer.video_info.pos_x);
-        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_Y, _g_MediaPlayer.video_info.pos_y);
-        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_W, _g_MediaPlayer.video_info.out_width << 16);
-        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_H, _g_MediaPlayer.video_info.out_height << 16);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_X, 0);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_Y, 0);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_W, g_stDrmCfg.width << 16);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_H, g_stDrmCfg.height << 16);
         g_stDrmCfg.mop_commited = 1;
         //printf("g_stDrmCfg.mop_commited = 1 \n");
     }
@@ -908,6 +1034,8 @@ static int atomic_set_plane(int osd_fb_id, int video_fb_id, int is_realtime) {
     {
         //add_plane_property(req, plane_id, "realtime_mode", 1);
     }
+    //printf("[atomic_set_plane]ret=%d x=%d y=%d out_width=%d out_height=%d\n",
+    //    ret,_g_MediaPlayer.video_info.pos_x,_g_MediaPlayer.video_info.pos_y,_g_MediaPlayer.video_info.out_width,_g_MediaPlayer.video_info.out_height);
 
 
     drmModeAtomicAddProperty(req, g_stDrmCfg.crtc_id, g_stDrmCfg.drm_mode_prop_ids[1].FENCE_ID, (uint64_t)&g_stDrmCfg.out_fence);//use this flag,must be close out_fence
@@ -931,146 +1059,7 @@ static int atomic_set_plane(int osd_fb_id, int video_fb_id, int is_realtime) {
     return 0;
 }
 
-MI_S32 sstar_update_pointoffset()
-{
-    MI_BOOL bUpdataGpuGfxPointFail = false;
 
-    if(g_stdOsdGpuGfx != NULL )
-    {
-        //Update osd Pointoffset
-        if (!g_stdOsdGpuGfx->updateLTPointOffset(g_u32GpuLT_X+1, g_u32GpuLT_Y+1))
-        {
-            printf("Failed to set keystone LT correction points\n");
-            bUpdataGpuGfxPointFail = true;
-            return -1;
-        }
-        if (!g_stdOsdGpuGfx->updateLBPointOffset(g_u32GpuLB_X+1, g_u32GpuLB_Y+1))
-        {
-            printf("Failed to set keystone LB correction points\n");
-            bUpdataGpuGfxPointFail = true;
-            return -1;
-        }
-        if (!g_stdOsdGpuGfx->updateRTPointOffset(g_u32GpuRT_X+1, g_u32GpuRT_Y+1))
-        {
-            printf("Failed to set keystone RT correction points\n");
-            bUpdataGpuGfxPointFail = true;
-            return -1;
-        }
-        if (!g_stdOsdGpuGfx->updateRBPointOffset(g_u32GpuRB_X+1, g_u32GpuRB_Y+1))
-        {
-            printf("Failed to set keystone RB correction points\n");
-            bUpdataGpuGfxPointFail = true;
-            return -1;
-        }
-    }
-
-    if(g_stdVideoGpuGfx != NULL )
-    {
-
-        //Update video Pointoffset
-        if (!g_stdVideoGpuGfx->updateLTPointOffset(g_u32GpuLT_X+2, g_u32GpuLT_Y+2))
-        {
-            printf("Failed to set keystone LT correction points\n");
-            bUpdataGpuGfxPointFail = true;
-            return -1;
-        }
-        if (!g_stdVideoGpuGfx->updateLBPointOffset(g_u32GpuLB_X+2, g_u32GpuLB_Y+2))
-        {
-            printf("Failed to set keystone LB correction points\n");
-            bUpdataGpuGfxPointFail = true;
-            return -2;
-        }
-        if (!g_stdVideoGpuGfx->updateRTPointOffset(g_u32GpuRT_X+2, g_u32GpuRT_Y+2))
-        {
-            printf("Failed to set keystone RT correction points\n");
-            bUpdataGpuGfxPointFail = true;
-            return -3;
-        }
-        if (!g_stdVideoGpuGfx->updateRBPointOffset(g_u32GpuRB_X+2, g_u32GpuRB_Y+2))
-        {
-            printf("Failed to set keystone RB correction points\n");
-            bUpdataGpuGfxPointFail = true;
-            return -4;
-        }
-    }
-    if (bUpdataGpuGfxPointFail == false)
-    {
-        printf("Updata Keystone info done:\n");
-        printf("==================================\n");
-        printf("LTPointOffset X:%d, Y:%d\n", g_u32GpuLT_X, g_u32GpuLT_Y);
-        printf("LBPointOffset X:%d, Y:%d\n", g_u32GpuLB_X, g_u32GpuLB_Y);
-        printf("RTPointOffset X:%d, Y:%d\n", g_u32GpuRT_X, g_u32GpuRT_Y);
-        printf("RBPointOffset X:%d, Y:%d\n", g_u32GpuRB_X, g_u32GpuRB_Y);
-        printf("==================================\n");
-        g_bGpuInfoChange_mop = false;
-        //g_bGpuUifresh = true;
-    }
-    return MI_SUCCESS;
-}
-
-MI_S32 sstar_reset_osdpointoffset()
-{
-    if(g_stdOsdGpuGfx != NULL )
-    {
-        //Update osd Pointoffset
-        if (!g_stdOsdGpuGfx->updateLTPointOffset(3, 3))
-        {
-            printf("Failed to set keystone LT correction points\n");
-            return -1;
-        }
-        if (!g_stdOsdGpuGfx->updateLBPointOffset(3, 3))
-        {
-            printf("Failed to set keystone LB correction points\n");
-            return -2;
-        }
-        if (!g_stdOsdGpuGfx->updateRTPointOffset(3, 3))
-        {
-            printf("Failed to set keystone RT correction points\n");
-            return -3;
-        }
-        if (!g_stdOsdGpuGfx->updateRBPointOffset(3, 3))
-        {
-            printf("Failed to set keystone RB correction points\n");
-            return -4;
-        }
-    }
-    return MI_SUCCESS;
-
-}
-
-MI_S32 sstar_reset_moppointoffset()
-{
-    if(g_stdVideoGpuGfx != NULL )
-    {
-
-        if (!g_stdVideoGpuGfx->updateLTPointOffset(3, 3))
-        {
-            printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-            return -1;
-        }
-        if (!g_stdVideoGpuGfx->updateLBPointOffset(3, 3))
-        {
-            printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-            return -2;
-        }
-        if (!g_stdVideoGpuGfx->updateRTPointOffset(3, 3))
-        {
-            printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-            return -3;
-        }
-        if (!g_stdVideoGpuGfx->updateRBPointOffset(3, 3))
-        {
-            printf("[LINE: %d]Failed to set keystone correction points\n",__LINE__);
-            return -4;
-        }
-    }
-    else
-    {
-        printf("[LINE: %d]g_stdVideoGpuGfx is null\n",__LINE__);
-    }
-
-    return MI_SUCCESS;
-}
 
 /* User handle event */
 static int mm_cal_video_size(video_info_t *video_info, int pic_width, int pic_height)
@@ -1274,66 +1263,6 @@ static void mm_video_event_handle(event_info_t *event_info)
     }
 }
 
-static void sstar_player_default_opts()
-{
-    mm_player_set_opts("audio_format", "", AV_PCM_FMT_S16);
-    mm_player_set_opts("audio_channels", "", 2);
-    mm_player_set_opts("audio_samplerate", "", 44100);
-
-    mm_player_set_opts("video_bypass", "", 0);
-    //mm_player_set_opts("video_rotate", "", _g_MediaPlayer.video_info.rotate);
-    mm_player_set_opts("video_ratio", "", _g_MediaPlayer.video_info.ratio);
-
-    mm_player_register_event_cb(mm_video_event_handle);
-
-    printf("ssplayer video_rotate=%d _g_rotate_mode=%d url:%s panel_height=%d panel_width=%d\n",_g_MediaPlayer.video_info.rotate,_g_rotate_mode, _g_MediaPlayer.param.url,_g_MediaPlayer.param.panel_height,_g_MediaPlayer.param.panel_width);
-}
-
-static void sstar_player_init()
-{
-    // set default ratio mode
-    _g_MediaPlayer.video_info.ratio = (int)AV_SCREEN_MODE;
-    _g_MediaPlayer.param.protocol = AV_PROTOCOL_FILE;
-
-
-    // set default disp windows size
-    _g_MediaPlayer.param.panel_width = g_stDrmCfg.width;
-    _g_MediaPlayer.param.panel_height = g_stDrmCfg.height;
-
-    _g_MediaPlayer.param.url = g_InputFile;
-
-    sstar_player_default_opts();
-
-}
-#if 0
-void sstar_drm_update(stDmaBuf_t* OutputBuf, DrmPlaneId plane_id, int need_commit)
-{
-    int s32Ret;
-    drm_buf_t *drm_buf;
-    drm_buf = (drm_buf_t*)OutputBuf->priavte;
-
-    s32Ret = AddDmabufToDRM(OutputBuf);
-    if (s32Ret != 0)
-    {
-        //printf("AddDmabufToDRM:%d\n", s32Ret);
-    }
-    atomic_set_plane(plane_id, drm_buf->fb_id, 0);
-
-    if(plane_id == MOPG_ID0)
-    {
-        drm_free_gem_handle(&prev_mop_gem_handle);
-        prev_mop_gem_handle.first = drm_buf->fb_id;
-        prev_mop_gem_handle.second = drm_buf->gem_handle[0];
-    }
-    else
-    {
-        drm_free_gem_handle(&prev_gop_gem_handle);
-        prev_gop_gem_handle.first = drm_buf->fb_id;
-        prev_gop_gem_handle.second = drm_buf->gem_handle[0];
-    }
-
-}
-#endif
 static MI_S32 sstar_init_drm()
 {
     int ret;
@@ -1412,20 +1341,40 @@ static void sstar_deinit_drm()
 }
 
 
+static MI_S32 sstar_sys_init()
+{
+    /************************************************
+    step :init SYS
+    *************************************************/
+    MI_U64           u64Pts = 0;
+    MI_SYS_Version_t stVersion;
+    struct timeval   curStamp;
+    STCHECKRESULT(MI_SYS_Init(0));
+    STCHECKRESULT(MI_SYS_GetVersion(0, &stVersion));
+    printf("Get MI_SYS_Version:%s\n", stVersion.u8Version);
+
+    gettimeofday(&curStamp, NULL);
+    u64Pts = (curStamp.tv_sec) * 1000000ULL + curStamp.tv_usec;
+    STCHECKRESULT(MI_SYS_InitPtsBase(0, u64Pts));
+
+    gettimeofday(&curStamp, NULL);
+    u64Pts = (curStamp.tv_sec) * 1000000ULL + curStamp.tv_usec;
+    STCHECKRESULT(MI_SYS_SyncPts(0, u64Pts));
+
+    STCHECKRESULT(MI_SYS_GetCurPts(0, &u64Pts));
+    printf("%s:%d Get MI_SYS_CurPts:0x%llx(%ds,%dus)\n", __func__, __LINE__, u64Pts, (int)curStamp.tv_sec,
+           (int)curStamp.tv_usec);
+    //***********************************************
+    //end init sys
+    return MI_SUCCESS;
+}
+
+
 static MI_S32 sstar_scl_init()
 {
-    MI_U32 u32SclChnId = 0;
-    MI_U32 u32SclPortId = 0;
-    MI_U32 u32SclDevId = 0;
-
-    if (g_u8PipelineMode == 0) //HDMI_RX -> HVP -> SCL
-    {
-        u32SclDevId = 8;
-    }
-    else if (g_u8PipelineMode == 1)//File -> FFMPEG -> SCL
-    {
-        u32SclDevId = 1;
-    }
+    MI_U32 u32SclChnId = _g_HdmiRxPlayer.stSclChnPort.u32ChnId;
+    MI_U32 u32SclPortId = _g_HdmiRxPlayer.stSclChnPort.u32PortId;
+    MI_U32 u32SclDevId = _g_HdmiRxPlayer.stSclChnPort.u32DevId;
 
 
     MI_SCL_DevAttr_t stSclDevAttr;
@@ -1450,8 +1399,8 @@ static MI_S32 sstar_scl_init()
 
     memset(&stSclOutPortParam, 0x0, sizeof(MI_SCL_OutPortParam_t));
     stSclOutPortParam.ePixelFormat = (MI_SYS_PixelFormat_e) E_MI_SYS_PIXEL_FRAME_YUV_SEMIPLANAR_420;
-    stSclOutPortParam.stSCLOutputSize.u16Width= ALIGN_UP(g_stDrmCfg.width,16);
-    stSclOutPortParam.stSCLOutputSize.u16Height= g_stDrmCfg.height;
+    stSclOutPortParam.stSCLOutputSize.u16Width= VEDIO_WIDTH;
+    stSclOutPortParam.stSCLOutputSize.u16Height= VEDIO_HEIGHT;
 
     stSclOutPortParam.bMirror = FALSE;
     stSclOutPortParam.bFlip = FALSE;
@@ -1508,8 +1457,6 @@ static MI_S32 sstar_scl_deinit()
 static int init_queue_buf()
 {
     int i;
-    uint32_t u32Width  = ALIGN_UP(g_stDrmCfg.width,16);
-    uint32_t u32Height = g_stDrmCfg.height;
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
     int count_fail = 0;;
 
@@ -1543,7 +1490,7 @@ static int init_queue_buf()
             return -1;
         }
 
-        _g_GfxInputBuffer[i] = std::make_shared<GpuGraphicBuffer>(u32Width, u32Height, u32GpuInputFormat, u32Width);
+        _g_GfxInputBuffer[i] = std::make_shared<GpuGraphicBuffer>(VEDIO_WIDTH, VEDIO_HEIGHT, u32GpuInputFormat, VEDIO_WIDTH);
         if (!_g_GfxInputBuffer[i]->initCheck())
         {
             printf("Create GpuGraphicBuffer failed\n");
@@ -1555,7 +1502,7 @@ static int init_queue_buf()
 
         _g_ListEntryNode[i]->EntryMutex = PTHREAD_MUTEX_INITIALIZER;
 
-        list_add_tail(&_g_ListEntryNode[i]->list, &g_HeadListGpuGfxInput);
+        list_add_tail(&_g_ListEntryNode[i]->list, &g_HeadListSclOutput);
 
     }
     if(count_fail >= BUF_DEPTH )
@@ -1567,13 +1514,190 @@ static int init_queue_buf()
     {
         return 0;
     }
+
+    return 0;
+}
+
+static void deinit_queue_buf()
+{
+    for(int i = 0; i < BUF_DEPTH  ; i++)
+    {
+        _g_GfxInputBuffer[i] = NULL;
+        delete _g_ListEntryNode[i];
+    }
+    printf("deinit_queue_buf \n");
+}
+
+static MI_S32 sstar_update_pointoffset()
+{
+    MI_BOOL bUpdataGpuGfxPointFail = false;
+
+    if(g_stdOsdGpuGfx != NULL )
+    {
+        //Update osd Pointoffset
+        if (!g_stdOsdGpuGfx->updateLTPointOffset(g_u32GpuLT_X+1, g_u32GpuLT_Y+1))
+        {
+            printf("Failed to set osd keystone LT correction points g_u32GpuLT_X=%d g_u32GpuLT_Y=%d\n",g_u32GpuLT_X,g_u32GpuLT_Y);
+            bUpdataGpuGfxPointFail = true;
+            return -1;
+        }
+        if (!g_stdOsdGpuGfx->updateLBPointOffset(g_u32GpuLB_X+1, g_u32GpuLB_Y+1))
+        {
+            printf("Failed to set osd keystone LB correction points\n");
+            bUpdataGpuGfxPointFail = true;
+            return -1;
+        }
+        if (!g_stdOsdGpuGfx->updateRTPointOffset(g_u32GpuRT_X+1, g_u32GpuRT_Y+1))
+        {
+            printf("Failed to set osd keystone RT correction points\n");
+            bUpdataGpuGfxPointFail = true;
+            return -1;
+        }
+        if (!g_stdOsdGpuGfx->updateRBPointOffset(g_u32GpuRB_X+1, g_u32GpuRB_Y+1))
+        {
+            printf("Failed to set osd keystone RB correction points\n");
+            bUpdataGpuGfxPointFail = true;
+            return -1;
+        }
+    }
+
+    if(g_stdVideoGpuGfx != NULL )
+    {
+
+        //Update video Pointoffset
+        if (!g_stdVideoGpuGfx->updateLTPointOffset(g_u32GpuLT_X+2, g_u32GpuLT_Y+2))
+        {
+            printf("Failed to set keystone LT correction points g_u32GpuLT_X=%d g_u32GpuLT_Y=%d\n",g_u32GpuLT_X,g_u32GpuLT_Y);
+            bUpdataGpuGfxPointFail = true;
+            return -1;
+        }
+        if (!g_stdVideoGpuGfx->updateLBPointOffset(g_u32GpuLB_X+2, g_u32GpuLB_Y+2))
+        {
+            printf("Failed to set keystone LB correction points g_u32GpuLT_X=%d g_u32GpuLT_Y=%d\n",g_u32GpuLT_X,g_u32GpuLT_Y);
+            bUpdataGpuGfxPointFail = true;
+            return -2;
+        }
+        if (!g_stdVideoGpuGfx->updateRTPointOffset(g_u32GpuRT_X+2, g_u32GpuRT_Y+2))
+        {
+            printf("Failed to set keystone RT correction points g_u32GpuLT_X=%d g_u32GpuLT_Y=%d\n",g_u32GpuLT_X,g_u32GpuLT_Y);
+            bUpdataGpuGfxPointFail = true;
+            return -3;
+        }
+        if (!g_stdVideoGpuGfx->updateRBPointOffset(g_u32GpuRB_X+2, g_u32GpuRB_Y+2))
+        {
+            printf("Failed to set keystone RB correction points g_u32GpuLT_X=%d g_u32GpuLT_Y=%d\n",g_u32GpuLT_X,g_u32GpuLT_Y);
+            bUpdataGpuGfxPointFail = true;
+            return -4;
+        }
+    }
+
+    if(g_stdHdmiRxGpuGfx != NULL )
+    {
+
+        //Update hdmirx Pointoffset
+        if (!g_stdHdmiRxGpuGfx->updateLTPointOffset(g_u32GpuLT_X+2, g_u32GpuLT_Y+2))
+        {
+            printf("Failed to set keystone LT correction points g_u32GpuLT_X=%d g_u32GpuLT_Y=%d\n",g_u32GpuLT_X,g_u32GpuLT_Y);
+            bUpdataGpuGfxPointFail = true;
+            return -1;
+        }
+        if (!g_stdHdmiRxGpuGfx->updateLBPointOffset(g_u32GpuLB_X+2, g_u32GpuLB_Y+2))
+        {
+            printf("Failed to set keystone LB correction points g_u32GpuLT_X=%d g_u32GpuLT_Y=%d\n",g_u32GpuLT_X,g_u32GpuLT_Y);
+            bUpdataGpuGfxPointFail = true;
+            return -2;
+        }
+        if (!g_stdHdmiRxGpuGfx->updateRTPointOffset(g_u32GpuRT_X+2, g_u32GpuRT_Y+2))
+        {
+            printf("Failed to set keystone RT correction points g_u32GpuLT_X=%d g_u32GpuLT_Y=%d\n",g_u32GpuLT_X,g_u32GpuLT_Y);
+            bUpdataGpuGfxPointFail = true;
+            return -3;
+        }
+        if (!g_stdHdmiRxGpuGfx->updateRBPointOffset(g_u32GpuRB_X+2, g_u32GpuRB_Y+2))
+        {
+            printf("Failed to set keystone RB correction points g_u32GpuLT_X=%d g_u32GpuLT_Y=%d\n",g_u32GpuLT_X,g_u32GpuLT_Y);
+            bUpdataGpuGfxPointFail = true;
+            return -4;
+        }
+    }
+
+
+    if (bUpdataGpuGfxPointFail == false)
+    {
+        printf("Updata Keystone info done:\n");
+        printf("==================================\n");
+        printf("LTPointOffset X:%d, Y:%d\n", g_u32GpuLT_X, g_u32GpuLT_Y);
+        printf("LBPointOffset X:%d, Y:%d\n", g_u32GpuLB_X, g_u32GpuLB_Y);
+        printf("RTPointOffset X:%d, Y:%d\n", g_u32GpuRT_X, g_u32GpuRT_Y);
+        printf("RBPointOffset X:%d, Y:%d\n", g_u32GpuRB_X, g_u32GpuRB_Y);
+        printf("==================================\n");
+        g_bGpuInfoChange_mop = false;
+        //g_bGpuUifresh = true;
+    }
+    return MI_SUCCESS;
 }
 
 
+static std::shared_ptr<GpuGraphicEffect> sstar_gpugfx_context_init(uint32_t u32Width, uint32_t u32Height, uint32_t u32GpuInputFormat)
+{
+    std::shared_ptr<GpuGraphicEffect> stGpuGfx;
 
-int g_flag = 0;
+    stGpuGfx = std::make_shared<GpuGraphicEffect>();
+    stGpuGfx->init(u32Width, u32Height, u32GpuInputFormat);
+    //Reset stGpuGfx Pointoffset
+    if (!stGpuGfx->updateLTPointOffset(3, 3) || !stGpuGfx->updateLBPointOffset(3, 3)
+        || !stGpuGfx->updateRTPointOffset(3, 3) || !stGpuGfx->updateRBPointOffset(3, 3))
+    {
+        printf("Failed to set keystone correction points\n");
+        return NULL;
+    }
+    return stGpuGfx;
+}
 
-void *sstar_update_pointoffset_thread(void * arg)
+static void sstar_hdmirx_context_init()
+{
+    memset(&_g_HdmiRxPlayer, 0x00, sizeof(hdmirx_player_t));
+    _g_HdmiRxPlayer.stHvpChnPort.eModId = E_MI_MODULE_ID_HVP;
+    _g_HdmiRxPlayer.stHvpChnPort.u32DevId = 0;
+    _g_HdmiRxPlayer.stHvpChnPort.u32ChnId = 0;
+    _g_HdmiRxPlayer.stHvpChnPort.u32PortId = 0;
+
+    _g_HdmiRxPlayer.stSclChnPort.eModId = E_MI_MODULE_ID_SCL;
+    _g_HdmiRxPlayer.stSclChnPort.u32DevId = 8;
+    _g_HdmiRxPlayer.stSclChnPort.u32ChnId = 0;
+    _g_HdmiRxPlayer.stSclChnPort.u32PortId =0;
+    _g_HdmiRxPlayer.eBindType = E_MI_SYS_BIND_TYPE_REALTIME;
+
+    _g_HdmiRxPlayer.hvpFrameRate = 60;
+    _g_HdmiRxPlayer.sclFrameRate = 60;
+
+}
+
+static void sstar_media_context_init()
+{
+    // set default ratio mode
+    _g_MediaPlayer.video_info.ratio = (int)AV_SCREEN_MODE;
+    _g_MediaPlayer.param.protocol = AV_PROTOCOL_FILE;
+
+    // set default disp windows size
+    _g_MediaPlayer.param.panel_width = g_stDrmCfg.width;
+    _g_MediaPlayer.param.panel_height = g_stDrmCfg.height;
+    _g_MediaPlayer.param.url = g_InputFile;
+
+    mm_player_set_opts("audio_format", "", AV_PCM_FMT_S16);
+    mm_player_set_opts("audio_channels", "", 2);
+    mm_player_set_opts("audio_samplerate", "", 44100);
+    mm_player_set_opts("video_bypass", "", 0);
+    mm_player_set_opts("video_only", "", 1);
+    //mm_player_set_opts("video_rotate", "", _g_MediaPlayer.video_info.rotate);//do not use ssplayer rotate,use gpu if you need
+    mm_player_set_opts("video_ratio", "", _g_MediaPlayer.video_info.ratio);
+    mm_player_register_event_cb(mm_video_event_handle);
+
+    printf("ssplayer video_rotate=%d _g_rotate_mode=%d url:%s panel_height=%d panel_width=%d\n",_g_MediaPlayer.video_info.rotate,_g_rotate_mode, _g_MediaPlayer.param.url,_g_MediaPlayer.param.panel_height,_g_MediaPlayer.param.panel_width);
+
+}
+
+void *sstar_PointOffsetMoniter_Thread(void * arg)
 {
     while(g_bThreadExitUpdatePoint)
     {
@@ -1588,58 +1712,11 @@ void *sstar_update_pointoffset_thread(void * arg)
             continue;
         }
     }
-    printf("EXIT sstar_update_pointoffset_thread \n");
+    printf("EXIT sstar_PointOffsetMoniter_Thread \n");
     return NULL;
 }
-#define DUMP_OPTION
-FILE* open_dump_file(char *path)
-{
-#ifdef DUMP_OPTION
-    static FILE *out_fd = NULL;
 
-    char file_out[128];
-    memset(file_out, '\0', sizeof(file_out));
-    sprintf(file_out, path);
-
-    if(out_fd == NULL)
-    {
-        out_fd = fopen(file_out, "awb");
-        if (!out_fd)
-        {
-            printf("fopen %s falied!\n", file_out);
-            fclose(out_fd);
-            out_fd = NULL;
-        }
-    }
-    return out_fd;
-#else
-    return NULL;
-#endif
-}
-
-void wirte_dump_file(FILE *fd, char *p_viraddr, int len)
-{
-#ifdef DUMP_OPTION
-    printf("write len=%d \n",len);
-    if(fd && p_viraddr && len > 0)
-    {
-        fwrite(p_viraddr, len, 1, fd);
-    }
-#endif
-}
-
-void close_dump_file(FILE *fd)
-{
-#ifdef DUMP_OPTION
-    if(fd)
-    {
-        fclose(fd);
-        fd = NULL;
-    }
-#endif
-}
-
-void *sstar_commit_thread(void * arg)
+void *sstar_DrmCommit_Thread(void * arg)
 {
     stDmaBuf_t osd_OutputBuf;
     stDmaBuf_t video_OutputBuf;
@@ -1758,14 +1835,14 @@ void *sstar_commit_thread(void * arg)
 
     }
 
-    printf("sstar_commit_thread exit\n");
+    printf("sstar_DrmCommit_Thread exit\n");
     return NULL;
 }
 
 
 
 
-void *ST_UI_Task(void * arg)
+void *sstar_OsdProcess_Thread(void * arg)
 {
     int ret;
     int BigUiWidth = g_stDrmCfg.width;
@@ -1836,12 +1913,11 @@ void *ST_UI_Task(void * arg)
     }
 
     std::shared_ptr<GpuGraphicBuffer> inputBuffer;
-    std::shared_ptr<GpuGraphicBuffer> outputBuffer;
-    printf("ST_UI_Task\n");
 
     uint32_t u32UiFormat;
     u32UiFormat = DRM_FORMAT_ABGR8888;
-    void *pVaddr = nullptr;
+    char *pVaddr = nullptr;
+    g_stdOsdGpuGfx = sstar_gpugfx_context_init(ALIGN_UP(g_stDrmCfg.width,16), g_stDrmCfg.height, u32UiFormat);
 
     inputBuffer = std::make_shared<GpuGraphicBuffer>(align_width, BigUiHeight, u32UiFormat, align_width * 4);
     if (!inputBuffer->initCheck()) {
@@ -1849,7 +1925,7 @@ void *ST_UI_Task(void * arg)
         return NULL;
     }
 
-    pVaddr = inputBuffer->map(READWRITE);
+    pVaddr = (char *)inputBuffer->map(READWRITE);
     if(!pVaddr) {
         printf("Failed to mmap dma buffer\n");
         return NULL;
@@ -1859,97 +1935,38 @@ void *ST_UI_Task(void * arg)
 
     for(int i=0 ;i < BigUiHeight;i++)
     {
-        memcpy(pVaddr + (i * align_width * 4), (void *)BigUiImageData + (i * BigUiWidth * 4), BigUiWidth*4);
+        memcpy(pVaddr + (i * align_width * 4), (char *)BigUiImageData + (i * BigUiWidth * 4), BigUiWidth * 4);
     }
-
-    ret = g_stdOsdGpuGfx->init(ALIGN_UP(g_stDrmCfg.width,16), g_stDrmCfg.height, u32UiFormat);
-
-    if (ret) {
-        printf("Failed to init gpu graphic effect\n");
-        return NULL;
-    }
-    sstar_reset_osdpointoffset();
+    inputBuffer->flushCache(READWRITE);
 
     while(g_bThreadExitUiDrm == TRUE)
     {
-#if 1
-        if(_g_MediaPlayer.video_info.rotate == 1)
+        if(_g_MediaPlayer.rotate == 1)
         {
             g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_90);
         }
-        else if(_g_MediaPlayer.video_info.rotate == 2)
+        else if(_g_MediaPlayer.rotate == 2)
         {
             g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_180);
         }
-        else if(_g_MediaPlayer.video_info.rotate == 3)
+        else if(_g_MediaPlayer.rotate == 3)
         {
             g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_270);
         }
-#endif
         if(!(list_empty(&g_HeadListOsdOutput)))
         {
             ListOsdOutput = list_first_entry(&g_HeadListOsdOutput, St_ListOutBufNode_t, list);
             pthread_mutex_lock(&ListOsdOutput->EntryMutex);
-
-#if 0
-            int dis_count=0;
-            if(dis_count%2)
-            {
-
-                g_stdOsdGpuGfx->cleanBufferCache();
-                for(int i=0 ;i < BigUiHeight;i++)
-                {
-                    memset(pVaddr   + (i * align_width * 4), 0x00, align_width * 4);
-                }
-                inputBuffer->flushCache(READWRITE);
-
-                ret = g_stdOsdGpuGfx->process(inputBuffer, g_RectDisplayRegion, ListOsdOutput->pOutBuffer);
-                if (ret)
-                {
-                    printf("Gpu graphic effect process failed\n");
-                    return NULL;
-                }
-            }
-            else
-            {
-
-                g_stdOsdGpuGfx->cleanBufferCache();
-
-                for(int i=0 ;i < BigUiHeight;i++)
-                {
-                    memset(pVaddr   + (i * align_width * 4), 0xff, align_width * 4);
-                }
-                inputBuffer->flushCache(READWRITE);
-                ret = g_stdOsdGpuGfx->process(inputBuffer, g_RectDisplayRegion, ListOsdOutput->pOutBuffer);
-                if (ret)
-                {
-                    printf("Gpu graphic effect process failed\n");
-                    return NULL;
-                }
-            }
-
-            if(dis_count >= 65535)
-            {
-                dis_count = 0;
-            }
-            else
-            {
-                dis_count++;
-            }
-#endif
-
-            inputBuffer->flushCache(READWRITE);
             ret = g_stdOsdGpuGfx->process(inputBuffer, g_RectDisplayRegion, ListOsdOutput->pOutBuffer);
             if (ret)
             {
-                printf("Gpu graphic effect process failed\n");
+                printf("Osd:Gpu graphic effect process failed\n");
                 return NULL;
             }
-            outputBuffer = ListOsdOutput->pOutBuffer;
             list_del(&(ListOsdOutput->list));
             pthread_mutex_unlock(&ListOsdOutput->EntryMutex);
             list_add_tail(&ListOsdOutput->list, &g_HeadListOsdCommit);
-            usleep(1000 * 1000);
+            usleep(16 * 1000);
 
         }
         else
@@ -1962,65 +1979,39 @@ void *ST_UI_Task(void * arg)
     }
     inputBuffer->unmap(pVaddr, READWRITE);
     inputBuffer = nullptr;
-
     g_stdOsdGpuGfx->deinit();
 
     return NULL;
 }
 
-static void deinit_queue_buf()
-{
-    for(int i = 0; i < BUF_DEPTH  ; i++)
-    {
-        _g_GfxInputBuffer[i] = NULL;
-        delete _g_ListEntryNode[i];
-    }
-    printf("deinit_queue_buf \n");
-}
-
-
-void *ST_SCL_Task(void * arg)
+void *sstar_SclEnqueue_thread(void * param)
 {
     MI_S32 s32Ret = MI_SUCCESS;
-    std::shared_ptr<GpuGraphicBuffer> GfxInputBuffer;
-    MI_S32 s32SclChn = 0;
+    std::shared_ptr<GpuGraphicBuffer> SclOutputBuffer;
     St_ListNode_t *ListSclToGfx;
 
     //*******scl port0*********
     MI_SYS_ChnPort_t stSclChnPort0;
     MI_SYS_DmaBufInfo_t stDmaBufInfo;
+    MI_SYS_ChnPort_t *pstSclChnPort;
 
-    MI_U8  u8SclDev;
-    if (g_u8PipelineMode == 0)
-    {
-        u8SclDev = 8;
-    }
-    else if(g_u8PipelineMode == 1)
-    {
-        u8SclDev = 1;
-    }
+    pstSclChnPort = (MI_SYS_ChnPort_t *)param;
+
     memset(&stSclChnPort0, 0x0, sizeof(MI_SYS_ChnPort_t));
+    stSclChnPort0.eModId = pstSclChnPort->eModId;
+    stSclChnPort0.u32DevId = pstSclChnPort->u32DevId;
+    stSclChnPort0.u32ChnId = pstSclChnPort->u32ChnId;
+    stSclChnPort0.u32PortId = pstSclChnPort->u32PortId;
 
-    stSclChnPort0.eModId = E_MI_MODULE_ID_SCL;
-    stSclChnPort0.u32DevId = u8SclDev;
-    stSclChnPort0.u32ChnId = s32SclChn;
-    stSclChnPort0.u32PortId = 0x0;
-
-    //STUB_ResetAllpointOffset();
     ///*******g_bThreadExitScl*********//
     while (g_bThreadExitScl == TRUE)
     {
-        if(g_bGpuInfoChange_mop == true)
+        if(!(list_empty(&g_HeadListSclOutput)))
         {
-            //STUB_UpdataAllPointOffset();
-        }
+            ListSclToGfx = list_first_entry(&g_HeadListSclOutput, St_ListNode_t, list);
+            SclOutputBuffer = ListSclToGfx->pstdInputBuffer;
 
-        if(!(list_empty(&g_HeadListGpuGfxInput)))
-        {
-            ListSclToGfx = list_first_entry(&g_HeadListGpuGfxInput, St_ListNode_t, list);
-            GfxInputBuffer = ListSclToGfx->pstdInputBuffer;
-
-            if(GfxInputBuffer == NULL)
+            if(SclOutputBuffer == NULL)
             {
                 printf("Warn: Get input buf from list is NULL \n");
                 list_del(&(ListSclToGfx->list));
@@ -2038,22 +2029,22 @@ void *ST_SCL_Task(void * arg)
         }
 
         memset(&stDmaBufInfo, 0x00, sizeof(MI_SYS_DmaBufInfo_t));
-        stDmaBufInfo.s32Fd[0] = GfxInputBuffer->getFd();
-        stDmaBufInfo.s32Fd[1] = GfxInputBuffer->getFd();
-        stDmaBufInfo.u16Width = (MI_U16)GfxInputBuffer->getWidth();
-        stDmaBufInfo.u16Height = (MI_U16)GfxInputBuffer->getHeight();
-        stDmaBufInfo.u32Stride[0] = GfxInputBuffer->getWidth();
-        stDmaBufInfo.u32Stride[1] = GfxInputBuffer->getWidth();
+        stDmaBufInfo.s32Fd[0] = SclOutputBuffer->getFd();
+        stDmaBufInfo.s32Fd[1] = SclOutputBuffer->getFd();
+        stDmaBufInfo.u16Width = (MI_U16)SclOutputBuffer->getWidth();
+        stDmaBufInfo.u16Height = (MI_U16)SclOutputBuffer->getHeight();
+        stDmaBufInfo.u32Stride[0] = SclOutputBuffer->getWidth();
+        stDmaBufInfo.u32Stride[1] = SclOutputBuffer->getWidth();
         stDmaBufInfo.u32DataOffset[0] = 0;
         stDmaBufInfo.u32DataOffset[1] = stDmaBufInfo.u16Width *stDmaBufInfo.u16Height;
-        if(GfxInputBuffer->getFormat() == DRM_FORMAT_NV12)
+        if(SclOutputBuffer->getFormat() == DRM_FORMAT_NV12)
         {
             stDmaBufInfo.eFormat = (MI_SYS_PixelFormat_e)E_MI_SYS_PIXEL_FRAME_YUV_SEMIPLANAR_420;
         }
         memcpy(&(ListSclToGfx->stDmaBufInfo), &stDmaBufInfo, sizeof(MI_SYS_DmaBufInfo_t));
 
         pthread_mutex_unlock(&ListSclToGfx->EntryMutex);
-        list_add_tail(&ListSclToGfx->list, &g_HeadListGpuGfxOutput);
+        list_add_tail(&ListSclToGfx->list, &g_HeadListGpuGfxInput);
 
         s32Ret = MI_SYS_ChnOutputPortEnqueueDmabuf(&stSclChnPort0, &stDmaBufInfo);
         if (s32Ret != 0)
@@ -2062,39 +2053,26 @@ void *ST_SCL_Task(void * arg)
             return NULL;
         }
     }
-    printf("ST_SCL_Taskg_bThreadExitScl == end!!!\n ");
+    printf("sstar_SclEnqueue_thread g_bThreadExitScl == end!!!\n ");
 
     return NULL;
 }
 
-void *ST_GFX_Task(void * arg)
+
+void *sstar_HdmiRxProcess_Thread(void * param)
 {
     MI_S32 s32Ret = MI_SUCCESS;
+    std::shared_ptr<GpuGraphicBuffer> GfxInputBuffer;
     St_ListOutBufNode_t *ListVideoOutput;
-    std::shared_ptr<GpuGraphicBuffer> outputBuffer;
-    int ret;
-
-    MI_U8  u8SclDev;
-    if (g_u8PipelineMode == 0)
-    {
-        u8SclDev = 8;
-    }
-    else if(g_u8PipelineMode == 1)
-    {
-        u8SclDev = 1;
-    }
-    MI_S32 s32SclChn = 0;
-
-    //*******scl port0*********
+    MI_SYS_ChnPort_t *pstSclChnPort = (MI_SYS_ChnPort_t *)param;
     MI_SYS_ChnPort_t stSclChnPort0;
-    //MI_SYS_DmaBufInfo_t stDmaBufInfo;
     MI_SYS_DmaBufInfo_t stDmaOutputBufInfo2;
     memset(&stSclChnPort0, 0x0, sizeof(MI_SYS_ChnPort_t));
 
-    stSclChnPort0.eModId = E_MI_MODULE_ID_SCL;
-    stSclChnPort0.u32DevId = u8SclDev;
-    stSclChnPort0.u32ChnId = s32SclChn;
-    stSclChnPort0.u32PortId = 0x0;
+    stSclChnPort0.eModId = pstSclChnPort->eModId;
+    stSclChnPort0.u32DevId = pstSclChnPort->u32DevId;
+    stSclChnPort0.u32ChnId = pstSclChnPort->u32ChnId;
+    stSclChnPort0.u32PortId = pstSclChnPort->u32PortId;
 
     /************************************************
     step :init GPU
@@ -2102,19 +2080,7 @@ void *ST_GFX_Task(void * arg)
     uint32_t u32Width  = ALIGN_UP(g_stDrmCfg.width,16);
     uint32_t u32Height = g_stDrmCfg.height;
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
-
-
-    ret = g_stdVideoGpuGfx->init(u32Width, u32Height, u32GpuInputFormat);
-    if (ret) {
-        printf("Failed to init gpu graphic effect\n");
-        return NULL;
-    }
-
-    ret = sstar_reset_moppointoffset();
-    if(ret != 0)
-    {
-        printf("sstar_reset_pointoffset fail,ret=%d \n",ret);
-    }
+    g_stdHdmiRxGpuGfx = sstar_gpugfx_context_init(u32Width, u32Height, u32GpuInputFormat);
 
     struct timeval tv;
     MI_S32 s32FdSclPort0 = -1;
@@ -2122,13 +2088,11 @@ void *ST_GFX_Task(void * arg)
 
     if (MI_SUCCESS != (s32Ret = MI_SYS_GetFd(&stSclChnPort0, &s32FdSclPort0)))
     {
-        printf("GET scl Fd Failed , scl Chn = %d\n", s32SclChn);
+        printf("GET scl Fd Failed , scl Chn = %d\n", stSclChnPort0.u32ChnId);
         return NULL;
     }
-    printf("Get scl Fd = %d, scl Chn = %d\n", s32FdSclPort0, s32SclChn);
+    printf("Get scl Fd = %d, scl Chn = %d\n", s32FdSclPort0, stSclChnPort0.u32ChnId);
 
-    std::shared_ptr<GpuGraphicBuffer> GfxInputBuffer;
-    std::shared_ptr<GpuGraphicBuffer> GfxOutputBuffer;
 
     St_ListNode_t *GfxReadListNode;
     while(g_bThreadExitGfx == TRUE)
@@ -2140,13 +2104,13 @@ void *ST_GFX_Task(void * arg)
         s32Ret = select(s32FdSclPort0 + 1, &ReadFdsSclPort0, NULL, NULL, &tv);
         if (s32Ret < 0)
         {
-            printf("gfx_bgb_Task%d select failed\n", s32SclChn);
+            printf("slc select failed\n");
             sleep(1);
             break;
         }
         else if (0 == s32Ret)
         {
-            printf("gfx_bgb_Task%d select timeout\n", s32SclChn);
+            printf("slc select timeout\n");
             continue;
         }
         else
@@ -2172,10 +2136,9 @@ void *ST_GFX_Task(void * arg)
                 //printf("SclOutputPort DequeueDmabuf statu is Done\n");
             }
 
-
-            if(!(list_empty(&g_HeadListGpuGfxOutput)))
+            if(!(list_empty(&g_HeadListGpuGfxInput)))
             {
-                GfxReadListNode = list_first_entry(&g_HeadListGpuGfxOutput, St_ListNode_t, list);
+                GfxReadListNode = list_first_entry(&g_HeadListGpuGfxInput, St_ListNode_t, list);
                 GfxInputBuffer = GfxReadListNode->pstdInputBuffer;
 
                 if(GfxInputBuffer == NULL)
@@ -2190,7 +2153,7 @@ void *ST_GFX_Task(void * arg)
             }
             else
             {
-                printf("Warn: Get output buf from list failed\n");
+                //printf("Warn: Get output buf from list failed\n");
                 continue;
             }
 
@@ -2200,28 +2163,26 @@ void *ST_GFX_Task(void * arg)
                 pthread_mutex_lock(&ListVideoOutput->EntryMutex);
 
 #if 1
-                if(_g_MediaPlayer.video_info.rotate == 1)
+                if(_g_MediaPlayer.rotate == 1)
                 {
-                    g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_90);
+                    g_stdHdmiRxGpuGfx->updateTransformStatus(Transform :: ROT_90);
                 }
-                else if(_g_MediaPlayer.video_info.rotate == 2)
+                else if(_g_MediaPlayer.rotate == 2)
                 {
-                    g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_180);
+                    g_stdHdmiRxGpuGfx->updateTransformStatus(Transform :: ROT_180);
                 }
-                else if(_g_MediaPlayer.video_info.rotate == 3)
+                else if(_g_MediaPlayer.rotate == 3)
                 {
-                    g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_270);
+                    g_stdHdmiRxGpuGfx->updateTransformStatus(Transform :: ROT_270);
                 }
                 else
                 {
-                    g_stdVideoGpuGfx->updateTransformStatus(Transform :: NONE);
+                    g_stdHdmiRxGpuGfx->updateTransformStatus(Transform :: NONE);
                 }
 #endif
+                s32Ret = g_stdHdmiRxGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion, ListVideoOutput->pOutBuffer);
 
-                //printf("GfxInputBuffer getWidth=%d getHeight=%d \n",GfxInputBuffer->getWidth(),GfxInputBuffer->getHeight());
-                ret = g_stdVideoGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion, ListVideoOutput->pOutBuffer);
-
-                if (ret) {
+                if (s32Ret) {
                     printf("Gpu graphic effect process failed\n");
                     pthread_mutex_unlock(&GfxReadListNode->EntryMutex);
                     pthread_mutex_unlock(&ListVideoOutput->EntryMutex);
@@ -2229,7 +2190,7 @@ void *ST_GFX_Task(void * arg)
                 }
 
                 pthread_mutex_unlock(&GfxReadListNode->EntryMutex);
-                list_add_tail(&GfxReadListNode->list, &g_HeadListGpuGfxInput);
+                list_add_tail(&GfxReadListNode->list, &g_HeadListSclOutput);
                 list_del(&(ListVideoOutput->list));
                 pthread_mutex_unlock(&ListVideoOutput->EntryMutex);
 
@@ -2244,7 +2205,7 @@ void *ST_GFX_Task(void * arg)
 
         }
     }
-    g_stdVideoGpuGfx->deinit();
+    g_stdHdmiRxGpuGfx->deinit();
     MI_SYS_CloseFd(s32FdSclPort0);
     FD_ZERO(&ReadFdsSclPort0);
 
@@ -2253,12 +2214,96 @@ void *ST_GFX_Task(void * arg)
 
 
 
-static void * sstar_player_thread(void *args)
+void *sstar_VideoProcess_Thread(void * arg)
+{
+    St_ListOutBufNode_t *ListVideoOutput;
+    std::shared_ptr<GpuGraphicBuffer> outputBuffer;
+    frame_info_t frame_info;
+    uint32_t frame_offset[3];
+    int ret;
+    std::shared_ptr<GpuGraphicBuffer> GfxInputBuffer;
+
+    /************************************************
+    step :init GPU
+    *************************************************/
+    uint32_t u32Width  = ALIGN_UP(g_stDrmCfg.width,16);
+    uint32_t u32Height = g_stDrmCfg.height;
+    uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
+    g_stdVideoGpuGfx = sstar_gpugfx_context_init(u32Width, u32Height, u32GpuInputFormat);
+
+    while(g_bThreadExitGfx == TRUE)
+    {
+
+        if( _g_MediaPlayer.player_working )
+        {
+            ret = mm_player_get_video_frame(&frame_info);
+            if (ret < 0) {
+                usleep(10 * 1000);
+                continue;
+            }
+            if (frame_info.format == AV_PIXEL_FMT_NV12)
+            {
+                _g_MediaPlayer.video_info.out_width = 1080;
+                _g_MediaPlayer.video_info.out_height = 1920;
+
+                frame_offset[0] = 0;  //y data
+                frame_offset[1] = frame_info.data[1] - frame_info.data[0];   //uv offset
+                GfxInputBuffer = std::make_shared<GpuGraphicBuffer>(frame_info.dma_buf_fd, frame_info.width, frame_info.height, u32GpuInputFormat, frame_info.stride, frame_offset);
+                if(!GfxInputBuffer)
+                {
+                    printf("Failed to turn dmabuf to GpuGraphicBuffer\n");
+                    continue;
+                }
+                if(!(list_empty(&g_HeadListVideoOutput)))
+                {
+                    ListVideoOutput = list_first_entry(&g_HeadListVideoOutput, St_ListOutBufNode_t, list);
+                    pthread_mutex_lock(&ListVideoOutput->EntryMutex);
+                    if(_g_MediaPlayer.rotate == 1)
+                    {
+                        g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_90);
+                    }
+                    else if(_g_MediaPlayer.rotate == 2)
+                    {
+                        g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_180);
+                    }
+                    else if(_g_MediaPlayer.rotate == 3)
+                    {
+                        g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_270);
+                    }
+                    else
+                    {
+                        g_stdVideoGpuGfx->updateTransformStatus(Transform :: NONE);
+                    }
+
+                    ret = g_stdVideoGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion, ListVideoOutput->pOutBuffer);
+                    if (ret) {
+                        printf("Video:Gpu graphic effect process failed,dma_buf_fd=%d getBufferSize=%d\n", frame_info.dma_buf_fd, GfxInputBuffer->getBufferSize());
+                        pthread_mutex_unlock(&ListVideoOutput->EntryMutex);
+                        continue;
+                    }
+                    list_del(&(ListVideoOutput->list));
+                    pthread_mutex_unlock(&ListVideoOutput->EntryMutex);
+                    list_add_tail(&ListVideoOutput->list, &g_HeadListVideoCommit);
+                }
+                else
+                {
+                    //printf("Warn: Get input buf from list failed\n");
+                    usleep(10*1000);
+                    continue;
+                }
+
+            }
+            mm_player_put_video_frame(&frame_info);
+
+        }
+    }
+    g_stdVideoGpuGfx->deinit();
+    return NULL;
+}
+
+static void *sstar_PlayerMoniter_Thread(void *args)
 {
     int ret;
-    char     IqApiBinFilePath[128];
-    strcpy(IqApiBinFilePath, g_InputFile);
-
     while (g_bThreadExitPlayer == TRUE) {
         ret = mm_player_get_status();
         if (ret < 0) {
@@ -2281,12 +2326,7 @@ static void * sstar_player_thread(void *args)
                 printf("[%s %d]mm_player_close fail!\n", __FUNCTION__, __LINE__);
             }
             printf("restart \n");
-
-            //mm_player_set_opts("video_bypass", "", 0);
-            //mm_player_set_opts("video_rotate", "", _g_MediaPlayer.video_info.rotate);
-            //mm_player_register_event_cb(mm_video_event_handle);
-            sstar_player_init();
-
+            sstar_media_context_init();
             ret = mm_player_open(&_g_MediaPlayer.param);
             if (ret < 0)
             {
@@ -2302,106 +2342,9 @@ static void * sstar_player_thread(void *args)
     return NULL;
 }
 
-
-static void * sstar_video_thread(void * arg)
-{
-    int ret;
-    int i = 0;
-    frame_info_t frame_info;
-    MI_SYS_BUF_HANDLE hSclHandle = 0;
-    MI_SYS_BufConf_t stSclBufConf;
-    MI_SYS_BufInfo_t stSclBufInfo;
-    MI_SYS_ChnPort_t stSclChnInput;
-
-    struct timeval stTv;
-
-    memset(&stSclChnInput, 0x0, sizeof(MI_SYS_ChnPort_t));
-    memset(&stSclBufConf, 0x0, sizeof(MI_SYS_BufConf_t));
-    memset(&stSclBufInfo, 0x0, sizeof(MI_SYS_BufInfo_t));
-
-    stSclChnInput.eModId = E_MI_MODULE_ID_SCL;
-    stSclChnInput.u32DevId = 1;
-    stSclChnInput.u32ChnId = 0;
-    stSclChnInput.u32PortId = 0;
-
-    while (g_bThreadExitVideo == TRUE)
-    {
-        if( _g_MediaPlayer.player_working == 1)
-        {
-            ret = mm_player_get_video_frame(&frame_info);
-            if (ret < 0) {
-                usleep(10 * 1000);
-                continue;
-            }
-            if (frame_info.format == AV_PIXEL_FMT_NV12)
-            {
-                stSclBufConf.eBufType = E_MI_SYS_BUFDATA_FRAME;
-                gettimeofday(&stTv, NULL);
-                stSclBufConf.u64TargetPts = stTv.tv_sec*1000000 + stTv.tv_usec;
-                stSclBufConf.stFrameCfg.eFormat = E_MI_SYS_PIXEL_FRAME_YUV_SEMIPLANAR_420;
-                stSclBufConf.stFrameCfg.eFrameScanMode = E_MI_SYS_FRAME_SCAN_MODE_PROGRESSIVE;
-                stSclBufConf.stFrameCfg.u16Width = frame_info.width;
-                stSclBufConf.stFrameCfg.u16Height = frame_info.height;
-                if(_g_MediaPlayer.video_info.rotate == 1 || _g_MediaPlayer.video_info.rotate == 3)
-                {
-                    _g_MediaPlayer.video_info.out_width = frame_info.height;
-                    _g_MediaPlayer.video_info.out_height = frame_info.width;
-                }
-                else
-                {
-                    _g_MediaPlayer.video_info.out_width = frame_info.width;
-                    _g_MediaPlayer.video_info.out_height = frame_info.height;
-                }
-
-
-                //printf("width=%d height=%d\n",frame_info.width,frame_info.height);
-
-                ret = MI_SYS_ChnInputPortGetBuf(&stSclChnInput,&stSclBufConf,&stSclBufInfo,&hSclHandle,0);
-                if(ret !=0 )
-                {
-                    printf("MI_SYS_ChnInputPortGetBuf error!\n");
-                }
-                for(i=0 ;i < frame_info.height;i++)
-                {
-                    memcpy(stSclBufInfo.stFrameData.pVirAddr[0] + (i*stSclBufInfo.stFrameData.u32Stride[0]), frame_info.data[0] + (i*frame_info.stride[0]), stSclBufInfo.stFrameData.u32Stride[0]);
-                }
-                for(i=0 ;i < frame_info.height / 2;i++)
-                {
-                    memcpy(stSclBufInfo.stFrameData.pVirAddr[1] + (i*stSclBufInfo.stFrameData.u32Stride[1]), frame_info.data[1] + (i*frame_info.stride[1]), stSclBufInfo.stFrameData.u32Stride[1]);
-                }
-                ret = MI_SYS_ChnInputPortPutBuf(hSclHandle,&stSclBufInfo, FALSE);
-                if(ret !=0 )
-                {
-                    printf("MI_SYS_ChnInputPortPutBuf error!\n");
-                }
-                g_u32SclBufferCnt++;
-                //printf("scl input buffer ok!\n");
-            }
-            mm_player_put_video_frame(&frame_info);
-        }
-        else
-        {
-            //printf("===player is closed==cnt:%d===\n",cnt);
-            continue;
-        }
-    }
-    printf("[%s %d]exit!\n", __FUNCTION__, __LINE__);
-    return NULL;
-}
-
-
-static MI_S32 STUB_PipelineMode0Init()
+static MI_S32 sstar_hdmirx_init()
 {
     MI_S32 ret = MI_SUCCESS;
-
-    uint32_t frame_rate = 60;
-
-    MI_SYS_ChnPort_t stSrcChnPort;
-    MI_SYS_ChnPort_t stDstChnPort;
-    MI_U32 u32SrcFrmrate;
-    MI_U32 u32DstFrmrate;
-    MI_SYS_BindType_e eBindType;
-    MI_U32 u32BindParam;
 
     /************************************************
     step :init HDMI_RX
@@ -2432,12 +2375,38 @@ static MI_S32 STUB_PipelineMode0Init()
         return ret;
     }
     printf("MI HdmiRx Init done\n");
+    return MI_SUCCESS;
+}
+static MI_S32 sstar_hdmirx_deinit()
+{
+    MI_S32 ret = MI_SUCCESS;
+    MI_HDMIRX_PortId_e u8HdmirxPort = E_MI_HDMIRX_PORT0;
+    /************************************************
+    step :deinit HDMI_RX
+    *************************************************/
+    ret = MI_HDMIRX_DisConnect(u8HdmirxPort);
+    if (ret != MI_SUCCESS) {
+        printf("Deinit hdmirx fail");
+        return ret;
+    }
 
+    ret = MI_HDMIRX_DeInit();
+    if (ret != MI_SUCCESS) {
+        printf("DeInit CEC error");
+    }
+
+
+    return MI_SUCCESS;
+}
+
+static MI_S32 sstar_hvp_init()
+{
+    MI_S32 ret = MI_SUCCESS;
     /************************************************
     step :init HVP
     *************************************************/
-    MI_HVP_DEV u32HvpDevId = 0;
-    MI_HVP_CHN u32HvpChnId = 0;
+    MI_HVP_DEV u32HvpDevId = _g_HdmiRxPlayer.stHvpChnPort.u32DevId;
+    MI_HVP_CHN u32HvpChnId = _g_HdmiRxPlayer.stHvpChnPort.u32ChnId;
     MI_HVP_DeviceAttr_t stHvpDevAttr;
     MI_HVP_ChannelAttr_t stHvpChnAttr;
     MI_HVP_ChannelParam_t stHvpChnParam;
@@ -2454,7 +2423,7 @@ static MI_S32 STUB_PipelineMode0Init()
     stHvpChnAttr.enFrcMode = (MI_HVP_FrcMode_e)E_MI_HVP_FRC_MODE_FBL;
 
     stHvpChnAttr.stPqBufModeConfig.u16BufMaxCount = 1;
-    stHvpChnAttr.stPqBufModeConfig.u16BufMaxCount = ceil(frame_rate / 60) + 1;
+    stHvpChnAttr.stPqBufModeConfig.u16BufMaxCount = ceil(_g_HdmiRxPlayer.hvpFrameRate / 60) + 1;
 
     printf("[HVP]pqbuf=%d\n", stHvpChnAttr.stPqBufModeConfig.u16BufMaxCount);
 
@@ -2503,118 +2472,22 @@ static MI_S32 STUB_PipelineMode0Init()
     ret = MI_HVP_StartChannel(u32HvpDevId, u32HvpChnId);
     if (ret != MI_SUCCESS) {
         printf("MI_HVP_CreateChannel error\n");
-        return ret;//err
+        return ret;
     }
 
     hvp_event_thread_running = true;
     pthread_create(&hvp_event_thread, NULL, signal_monitor_hdmi, NULL);
 
     printf("MI Hvp Init done\n");
-
-    /************************************************
-    step :init SCL
-    *************************************************/
-    sstar_scl_init();
-
-    /************************************************
-    step :bind HVP -> SCL
-    *************************************************/
-    MI_U32 u32SclDevId = 8;
-    MI_U32 u32SclChnId = 0;
-    MI_U32 u32SclPortId = 0;
-
-    memset(&stSrcChnPort, 0x00, sizeof(MI_SYS_ChnPort_t));
-    memset(&stDstChnPort, 0x00, sizeof(MI_SYS_ChnPort_t));
-    stSrcChnPort.eModId = E_MI_MODULE_ID_HVP;
-    stSrcChnPort.u32DevId = u32HvpDevId;
-    stSrcChnPort.u32ChnId = u32HvpChnId;
-    stSrcChnPort.u32PortId = 0;
-    stDstChnPort.eModId = E_MI_MODULE_ID_SCL;
-    stDstChnPort.u32DevId = u32SclDevId;
-    stDstChnPort.u32ChnId = u32SclChnId;
-    stDstChnPort.u32PortId =u32SclPortId;
-    u32SrcFrmrate = 60;
-    u32DstFrmrate = 60;
-    eBindType = E_MI_SYS_BIND_TYPE_REALTIME;
-    u32BindParam = 0;
-    STCHECKRESULT(MI_SYS_BindChnPort2(0, &stSrcChnPort, &stDstChnPort, u32SrcFrmrate, u32DstFrmrate, eBindType, u32BindParam));
-
-    //STCHECKRESULT(MI_SYS_CreateChnOutputPortDmabufCusAllocator(&stDstChnPort));
-
-    pthread_create(&g_pThreadScl, NULL, ST_SCL_Task, NULL);
-    pthread_create(&g_pThreadGfx, NULL, ST_GFX_Task, NULL);
-
     return MI_SUCCESS;
 }
 
-
-static MI_S32 STUB_PipelineMode1Init()
+static MI_S32 sstar_hvp_deinit()
 {
-    int ret;
+    MI_S32 ret = MI_SUCCESS;
+    MI_HVP_DEV u32HvpDevId = _g_HdmiRxPlayer.stHvpChnPort.u32DevId;
+    MI_HVP_CHN u32HvpChnId = _g_HdmiRxPlayer.stHvpChnPort.u32ChnId;
 
-
-    sstar_player_init();
-    sstar_scl_init();
-
-    ret = mm_player_open(&_g_MediaPlayer.param);
-    if (ret < 0)
-    {
-        printf("mm_player_open fail \n");
-        return -1;
-    }
-    _g_MediaPlayer.player_working = true;
-
-    pthread_create(&g_player_thread, NULL, sstar_player_thread, NULL);
-    pthread_create(&g_video_thread, NULL, sstar_video_thread, NULL);
-
-    while(g_u32SclBufferCnt == 0)
-    {
-        usleep(10);
-        //printf("Scl do not have buffer!!!!!\n");
-    }
-
-    pthread_create(&g_pThreadScl, NULL, ST_SCL_Task, NULL);
-    pthread_create(&g_pThreadGfx, NULL, ST_GFX_Task, NULL);
-
-    return MI_SUCCESS;
-}
-
-
-static MI_S32 STUB_PipelineMode0Deinit()
-{
-    int ret = -1;
-    MI_HDMIRX_PortId_e u8HdmirxPort = E_MI_HDMIRX_PORT0;
-    MI_SYS_ChnPort_t stSrcChnPort;
-    MI_SYS_ChnPort_t stDstChnPort;
-    MI_HVP_DEV u32HvpDevId = 0;
-    MI_HVP_CHN u32HvpChnId = 0;
-    MI_U32 u32SclDevId = 8;
-    MI_U32 u32SclChnId = 0;
-    MI_U32 u32SclPortId = 0;
-    /************************************************
-    step :unbind HVP -> SCL
-    *************************************************/
-    memset(&stSrcChnPort, 0x00, sizeof(MI_SYS_ChnPort_t));
-    memset(&stDstChnPort, 0x00, sizeof(MI_SYS_ChnPort_t));
-    stSrcChnPort.eModId = E_MI_MODULE_ID_HVP;
-    stSrcChnPort.u32DevId = u32HvpDevId;
-    stSrcChnPort.u32ChnId = u32HvpChnId;
-    stSrcChnPort.u32PortId = 0;
-    stDstChnPort.eModId = E_MI_MODULE_ID_SCL;
-    stDstChnPort.u32DevId = u32SclDevId;
-    stDstChnPort.u32ChnId = u32SclChnId;
-    stDstChnPort.u32PortId =u32SclPortId;
-    STCHECKRESULT(MI_SYS_UnBindChnPort(0, &stSrcChnPort, &stDstChnPort));
-
-    /************************************************
-    step :deinit SCL
-    *************************************************/
-    sstar_scl_deinit();
-
-
-    /************************************************
-    step :deinit HVP
-    *************************************************/
     hvp_event_thread_running = false;
     pthread_join(hvp_event_thread, NULL);
 
@@ -2635,66 +2508,109 @@ static MI_S32 STUB_PipelineMode0Deinit()
         printf("MI_HVP_DestroyDevice error");
         return ret;
     }
-
-    /************************************************
-    step :deinit HDMI_RX
-    *************************************************/
-    ret = MI_HDMIRX_DeInit();
-    if (ret != MI_SUCCESS) {
-        printf("DeInit CEC error");
-    }
-    ret = MI_HDMIRX_DisConnect(u8HdmirxPort);
-    if (ret != MI_SUCCESS) {
-        printf("Deinit hdmirx fail");
-        return ret;
-    }
     return MI_SUCCESS;
 }
 
 
-static MI_S32 STUB_PipelineMode1Deinit()
+
+
+static MI_S32 sstar_HdmiPipeLine_Creat()
 {
-    g_bThreadExitPlayer = false;
-    pthread_join(g_player_thread, NULL);
-    g_bThreadExitVideo = false;
-    pthread_join(g_video_thread, NULL);
-    mm_player_close();
+    MI_S32 ret = MI_SUCCESS;
+    sstar_hdmirx_context_init();
+
+    ret = sstar_hdmirx_init();
+    if (ret != MI_SUCCESS) {
+        printf("sstar_hdmirx_init error: %d\n", ret);
+        return ret;
+    }
+    ret = sstar_hvp_init();
+    if (ret != MI_SUCCESS) {
+        printf("sstar_hdmirx_init error: %d\n", ret);
+        return ret;
+    }
+
+    ret = sstar_scl_init();
+    if (ret != MI_SUCCESS) {
+        printf("sstar_hdmirx_init error: %d\n", ret);
+        return ret;
+    }
+
+    STCHECKRESULT(MI_SYS_BindChnPort2(0, &_g_HdmiRxPlayer.stHvpChnPort, &_g_HdmiRxPlayer.stSclChnPort, _g_HdmiRxPlayer.hvpFrameRate, _g_HdmiRxPlayer.sclFrameRate, _g_HdmiRxPlayer.eBindType, 0));
+    pthread_create(&g_pThreadScl, NULL, sstar_SclEnqueue_thread, &_g_HdmiRxPlayer.stSclChnPort);
+    pthread_create(&g_pThreadGfx, NULL, sstar_HdmiRxProcess_Thread, &_g_HdmiRxPlayer.stSclChnPort);
+
+    return MI_SUCCESS;
+}
+
+static MI_S32 sstar_HdmiPipeLine_Destory()
+{
+    g_bThreadExitScl = false;
+    if(g_pThreadScl)
+    {
+        pthread_join(g_pThreadScl, NULL);
+    }
+
+    /************************************************
+    step :unbind HVP -> SCL
+    *************************************************/
+    STCHECKRESULT(MI_SYS_UnBindChnPort(0, &_g_HdmiRxPlayer.stHvpChnPort, &_g_HdmiRxPlayer.stSclChnPort));
 
     /************************************************
     step :deinit SCL
     *************************************************/
     sstar_scl_deinit();
+
+    /************************************************
+    step :deinit HVP
+    *************************************************/
+    sstar_hvp_deinit();
+
+    /************************************************
+    step :deinit HDMI_RX
+    *************************************************/
+    sstar_hdmirx_deinit();
+
+    return MI_SUCCESS;
+}
+
+static MI_S32 sstar_MediaPipeLine_Creat()
+{
+    int ret;
+    sstar_media_context_init();
+
+    ret = mm_player_open(&_g_MediaPlayer.param);
+    if (ret < 0)
+    {
+        printf("mm_player_open fail \n");
+        return -1;
+    }
+    _g_MediaPlayer.player_working = true;
+
+    pthread_create(&g_player_thread, NULL, sstar_PlayerMoniter_Thread, NULL);
+    pthread_create(&g_pThreadGfx, NULL, sstar_VideoProcess_Thread, NULL);
+
+    return MI_SUCCESS;
+}
+
+static MI_S32 sstar_MediaPipeLine_Destroy()
+{
+    if(g_player_thread)
+    {
+        g_bThreadExitPlayer = false;
+        pthread_join(g_player_thread, NULL);
+    }
+
+    mm_player_close();
     deinit_queue_buf();
     return MI_SUCCESS;
 
 }
 
-static MI_S32 STUB_BaseModuleInit()
+static MI_S32 sstar_BaseModule_Init()
 {
     int ret;
-    /************************************************
-    step :init SYS
-    *************************************************/
-    MI_U64           u64Pts = 0;
-    MI_SYS_Version_t stVersion;
-    struct timeval   curStamp;
-    STCHECKRESULT(MI_SYS_Init(0));
-    STCHECKRESULT(MI_SYS_GetVersion(0, &stVersion));
-    printf("Get MI_SYS_Version:%s\n", stVersion.u8Version);
-
-    gettimeofday(&curStamp, NULL);
-    u64Pts = (curStamp.tv_sec) * 1000000ULL + curStamp.tv_usec;
-    STCHECKRESULT(MI_SYS_InitPtsBase(0, u64Pts));
-
-    gettimeofday(&curStamp, NULL);
-    u64Pts = (curStamp.tv_sec) * 1000000ULL + curStamp.tv_usec;
-    STCHECKRESULT(MI_SYS_SyncPts(0, u64Pts));
-
-    STCHECKRESULT(MI_SYS_GetCurPts(0, &u64Pts));
-    printf("%s:%d Get MI_SYS_CurPts:0x%llx(%ds,%dus)\n", __func__, __LINE__, u64Pts, (int)curStamp.tv_sec,
-           (int)curStamp.tv_usec);
-    //***********************************************
-    //end init sys
+    sstar_sys_init();
 
     ret = init_queue_buf();
     if (ret < 0)
@@ -2703,29 +2619,27 @@ static MI_S32 STUB_BaseModuleInit()
         return -1;
     }
 
-
     g_RectDisplayRegion.left = 0;
     g_RectDisplayRegion.top = 0;
     g_RectDisplayRegion.right = ALIGN_UP(g_stDrmCfg.width,16);
     g_RectDisplayRegion.bottom = g_stDrmCfg.height;
 
-    pthread_create(&g_pThreadUpdatePoint, NULL, sstar_update_pointoffset_thread, NULL);
-
-    pthread_create(&g_pThreadCommit, NULL, sstar_commit_thread, NULL);
+    pthread_create(&g_pThreadUpdatePoint, NULL, sstar_PointOffsetMoniter_Thread, NULL);
+    pthread_create(&g_pThreadCommit,      NULL, sstar_DrmCommit_Thread, NULL);
 
     if(bShowUi)
     {
-        pthread_create(&g_pThreadUiDrm, NULL, ST_UI_Task, NULL);
+        pthread_create(&g_pThreadUiDrm, NULL, sstar_OsdProcess_Thread, NULL);
     }
 
     if (g_u8PipelineMode == 0)
     {
-        STUB_PipelineMode0Init();
+        sstar_HdmiPipeLine_Creat();
         //HDMI_RX -> HVP -> SCL
     }
     else if (g_u8PipelineMode == 1)
     {
-        STUB_PipelineMode1Init();
+        sstar_MediaPipeLine_Creat();
         //File -> FFMPEG -> SCL
     }
 
@@ -2734,20 +2648,14 @@ static MI_S32 STUB_BaseModuleInit()
 }
 
 
-static MI_S32 STUB_BaseModuleDeinit()
+static MI_S32 sstar_BaseModule_DeInit()
 {
-    g_bThreadExitScl = false;
-    if(g_pThreadScl)
-    {
-        pthread_join(g_pThreadScl, NULL);
-    }
 
     g_bThreadExitUpdatePoint = false;
     if(g_pThreadUpdatePoint)
     {
         pthread_join(g_pThreadUpdatePoint, NULL);
     }
-
 
     g_bThreadExitCommit = false;
     if(g_pThreadCommit)
@@ -2770,18 +2678,16 @@ static MI_S32 STUB_BaseModuleDeinit()
         }
     }
 
-    //sstar_deinit_drm();
-
     if (g_u8PipelineMode == 0)
     {
-        STUB_PipelineMode0Deinit();
-        //HDMI_RX -> HVP -> SCL
-    }//g_u8PipelineMode 0 end
+        sstar_HdmiPipeLine_Destory();
+        //HDMI_RX -> HVP -> SCL -> GPU -> Drm
+    }
     else if (g_u8PipelineMode == 1)
     {
-        STUB_PipelineMode1Deinit();
-        //File -> FFMPEG -> SCL
-    }//g_u8PipelineMode 1 end
+        sstar_MediaPipeLine_Destroy();
+        //File -> FFMPEG -> GPU -> Drm
+    }
 
     STCHECKRESULT(MI_SYS_Exit(0));
 
@@ -2828,7 +2734,9 @@ MI_S32 parse_args(int argc, char **argv)
         }
         if (0 == strcmp(argv[i], "-r"))
         {
-            _g_MediaPlayer.video_info.rotate = atoi(argv[i+1]);
+            _g_MediaPlayer.rotate  = atoi(argv[i+1]);
+            _g_MediaPlayer.video_info.rotate = _g_MediaPlayer.rotate;
+
             if(_g_MediaPlayer.video_info.rotate > 3)
             {
                 printf("<error>[-r]:Only supports 0-3\n");
@@ -2881,7 +2789,7 @@ MI_S32 parse_args(int argc, char **argv)
     return MI_SUCCESS;
 }
 
-void STUB_Common_Pause(void)
+void sstar_CmdParse_Pause(void)
 {
     char ch;
     MI_U16 u16GpuMaxW = g_stDrmCfg.width / 3;
@@ -3026,12 +2934,34 @@ void STUB_Common_Pause(void)
                     }
                 }
                 break;
+            case 'l':
+                {
+                    g_picQuality.u32Contrast --;
+                    g_picQuality.u32Hue --;
+                    g_picQuality.u32Saturation --;
+                    g_picQuality.u32Sharpness --;
+                    sstar_set_pictureQuality(g_picQuality);
+                }
+                break;
+            case 'k':
+                {
+                    g_picQuality.u32Contrast ++;
+                    g_picQuality.u32Hue ++;
+                    g_picQuality.u32Saturation ++;
+                    g_picQuality.u32Sharpness ++;
+                    sstar_set_pictureQuality(g_picQuality);
+                }
+                break;
+
+            //default:
+               // break;
         }
         printf("press q to exit\n");
         usleep(10 * 1000);
         continue;
     }
 }
+
 
 
 MI_S32 main(int argc, char **argv)
@@ -3050,7 +2980,7 @@ MI_S32 main(int argc, char **argv)
     g_u32GpuRB_Y = 0;
 
     memset(&_g_MediaPlayer, 0, sizeof(media_player_t));
-
+    memset(&g_picQuality, 0, sizeof(St_Csc_t));
     ret = parse_args(argc, argv);
     if(ret != MI_SUCCESS)
     {
@@ -3065,12 +2995,15 @@ MI_S32 main(int argc, char **argv)
         return -1;
     }
 
-    STCHECKRESULT(STUB_BaseModuleInit());
+    //Get pictureQuality
+    sstar_get_pictureQuality(&g_picQuality);
 
-    STUB_Common_Pause();
+    STCHECKRESULT(sstar_BaseModule_Init());
+
+    sstar_CmdParse_Pause();
 
 
-    STCHECKRESULT(STUB_BaseModuleDeinit());
+    STCHECKRESULT(sstar_BaseModule_DeInit());
     sstar_deinit_drm();
 
     return 0;
