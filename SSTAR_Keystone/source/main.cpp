@@ -107,7 +107,7 @@ typedef struct ui_info_s {
 typedef struct player_obj_s {
     bool exit;
     bool player_working;
-    //int  loop_cnt;
+    int  loop_mode;
     video_info_t video_info;
     ui_info_t ui_info;
     player_info_t param;
@@ -1670,7 +1670,6 @@ static void sstar_hdmirx_context_init()
 
     _g_HdmiRxPlayer.hvpFrameRate = 60;
     _g_HdmiRxPlayer.sclFrameRate = 60;
-
 }
 
 static void sstar_media_context_init()
@@ -1688,7 +1687,8 @@ static void sstar_media_context_init()
     mm_player_set_opts("audio_channels", "", 2);
     mm_player_set_opts("audio_samplerate", "", 44100);
     mm_player_set_opts("video_bypass", "", 0);
-    mm_player_set_opts("video_only", "", 1);
+    mm_player_set_opts("play_mode", "", _g_MediaPlayer.loop_mode);
+    //mm_player_set_opts("video_only", "", 1);
     //mm_player_set_opts("video_rotate", "", _g_MediaPlayer.video_info.rotate);//do not use ssplayer rotate,use gpu if you need
     mm_player_set_opts("video_ratio", "", _g_MediaPlayer.video_info.ratio);
     mm_player_register_event_cb(mm_video_event_handle);
@@ -2248,7 +2248,7 @@ void *sstar_VideoProcess_Thread(void * arg)
 
                 frame_offset[0] = 0;  //y data
                 frame_offset[1] = frame_info.data[1] - frame_info.data[0];   //uv offset
-                GfxInputBuffer = std::make_shared<GpuGraphicBuffer>(frame_info.dma_buf_fd, frame_info.width, frame_info.height, u32GpuInputFormat, frame_info.stride, frame_offset);
+                GfxInputBuffer = std::make_shared<GpuGraphicBuffer>(frame_info.dma_buf_fd[0], frame_info.width, frame_info.height, u32GpuInputFormat, frame_info.stride, frame_offset);
                 if(!GfxInputBuffer)
                 {
                     printf("Failed to turn dmabuf to GpuGraphicBuffer\n");
@@ -2277,7 +2277,7 @@ void *sstar_VideoProcess_Thread(void * arg)
 
                     ret = g_stdVideoGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion, ListVideoOutput->pOutBuffer);
                     if (ret) {
-                        printf("Video:Gpu graphic effect process failed,dma_buf_fd=%d getBufferSize=%d\n", frame_info.dma_buf_fd, GfxInputBuffer->getBufferSize());
+                        printf("Video:Gpu graphic effect process failed,dma_buf_fd=%d getBufferSize=%d\n", frame_info.dma_buf_fd[0], GfxInputBuffer->getBufferSize());
                         pthread_mutex_unlock(&ListVideoOutput->EntryMutex);
                         continue;
                     }
@@ -2325,7 +2325,7 @@ static void *sstar_PlayerMoniter_Thread(void *args)
             {
                 printf("[%s %d]mm_player_close fail!\n", __FUNCTION__, __LINE__);
             }
-            printf("restart \n");
+            printf("restart by user\n");
             sstar_media_context_init();
             ret = mm_player_open(&_g_MediaPlayer.param);
             if (ret < 0)
@@ -2731,6 +2731,16 @@ MI_S32 parse_args(int argc, char **argv)
             {
                 bInputVedioFile = true;
             }
+        }
+        if (0 == strcmp(argv[i], "-l"))
+        {
+            _g_MediaPlayer.loop_mode = atoi(argv[i+1]);
+            if(_g_MediaPlayer.loop_mode < 0 || _g_MediaPlayer.loop_mode > 1)
+            {
+                printf("<error>[-l]:Only support 0-1\n");
+                return -1;
+            }
+
         }
         if (0 == strcmp(argv[i], "-r"))
         {

@@ -128,7 +128,7 @@ enum {
 
 typedef struct frame_info_s {
     int      process_id;
-    int      dma_buf_fd;
+    int      dma_buf_fd[3];
     uint8_t  *data[3];
     uint32_t stride[3];
     int      width, height;
@@ -367,6 +367,16 @@ int mm_player_register_event_cb(void (*event_handler)(event_info_t *event_info))
  */
 int mm_player_send_stream(const uint8_t *buffer, int size, int64_t timestamp, int media_type);
 
+/* Only for airplay, support to add audio or video stream alone and start playing.
+ * player_info_t: refer to mm_player_open
+ * media_type: AV_MEDIA_TYPE_AUDIO/AV_MEDIA_TYPE_VIDEO
+ */
+int mm_player_add_stream(player_info_t *input, int media_type);
+
+/* Only for airplay, support to remove audio or video stream alone and stop playing.
+ * media_type: AV_MEDIA_TYPE_AUDIO/AV_MEDIA_TYPE_VIDEO
+ */
+int mm_player_remove_stream(int media_type);
 
 #ifdef __cplusplus
 }
