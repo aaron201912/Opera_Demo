@@ -2300,7 +2300,10 @@ void *sstar_VideoProcess_Thread(void * arg)
             mm_player_put_video_frame(&frame_info);
 
         }
-        usleep(10*1000);
+        else
+        {
+            usleep(10*1000);
+        }
     }
     g_stdVideoGpuGfx->deinit();
     return NULL;
