@@ -1729,9 +1729,6 @@ void *sstar_DrmCommit_Thread(void * arg)
     stDmaBuf_t video_OutputBuf;
     drm_buf_t osd_drm_buf;
     drm_buf_t video_drm_buf;
-    drmVBlank vbl;
-    int ret;
-
     St_ListOutBufNode_t *ListOsdCommit;
     St_ListOutBufNode_t *ListVideoCommit;
     std::shared_ptr<GpuGraphicBuffer> osdCommitBuf;
@@ -1740,18 +1737,6 @@ void *sstar_DrmCommit_Thread(void * arg)
     memset(&video_drm_buf, 0x00, sizeof(drm_buf_t));
     while(g_bThreadExitCommit)
     {
-
-#if 1
-        vbl.request.type = DRM_VBLANK_RELATIVE;
-        vbl.request.sequence = 1; // 等待下一个 VBlank
-        vbl.request.signal = NULL;
-
-        ret = drmWaitVBlank(g_stDrmCfg.fd, &vbl);
-        if (ret) {
-            printf("Error waiting for VBlank: %d\n", ret);
-            continue;
-        }
-#endif
         if(!(list_empty(&g_HeadListOsdCommit)))
         {
             ListOsdCommit = list_first_entry(&g_HeadListOsdCommit, St_ListOutBufNode_t, list);
