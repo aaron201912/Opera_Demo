@@ -59,7 +59,8 @@ enum {
     AV_ORIGIN_MODE   = 0,
     AV_SCREEN_MODE   = 1,
     AV_SAR_4_3_MODE  = 2,
-    AV_SAR_16_9_MODE = 3
+    AV_SAR_16_9_MODE = 3,
+    AV_AUTO_MODE     = 4,
 };
 
 enum {
@@ -147,7 +148,10 @@ typedef struct player_info_s {
     /* For local or DLNA player, input file name */
     const char* url;
 
-    /* Display panel info, set by user */
+    /* Display panel info, set by user
+     * !!!NOTE: if user do rotate after get video frame and set panel rotate, please set w/h after panel rotate.
+     * such as, origin panel w=1920 h=1080, after panel rotate w=1080 h=1920, so set panel_width=1080 panel_height=1920.
+     */
     int         panel_width;
     int         panel_height;
 

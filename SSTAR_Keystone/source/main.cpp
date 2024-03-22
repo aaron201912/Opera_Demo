@@ -55,7 +55,7 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 #include "mi_hvp_datatype.h"
 #include "mi_scl.h"
 #include <gpu_graphic_effect.h>
-#include <sstar_drm.h>
+#include "sstar_drm.h"
 
 
 #define VEDIO_WIDTH     1920
@@ -109,6 +109,8 @@ typedef struct player_obj_s {
     bool player_working;
     int  loop_mode;
     video_info_t video_info;
+    int stream_width;
+    int stream_height;
     ui_info_t ui_info;
     player_info_t param;
     int rotate;
@@ -276,8 +278,8 @@ struct buffer_object {
 
 typedef struct
 {
-    int fb_id;
-    int gem_handle[3];
+    unsigned int fb_id;
+    unsigned int gem_handle[3];
 }drm_buf_t;
 
 typedef struct
@@ -288,6 +290,7 @@ typedef struct
     int fds[3];
     int stride[3];
     int dataOffset[3];
+    uint64_t modifiers;
     void *priavte;
 }stDmaBuf_t;
 
@@ -328,6 +331,7 @@ typedef struct DrmModeConfiction_s
     unsigned int crtc_id;
     unsigned int osd_commited;
     unsigned int mop_commited;
+    unsigned int has_modifiers;
 
     unsigned int conn_id;
     unsigned int width;
@@ -412,15 +416,15 @@ MI_BOOL g_bGpuUifresh = false;
 
 MI_BOOL g_bChangePointOffset = false;
 
-std::pair<uint32_t, uint32_t> prev_gop_gem_handle(static_cast<uint32_t>(-1), static_cast<uint32_t>(-1));
-std::pair<uint32_t, uint32_t> prev_mop_gem_handle(static_cast<uint32_t>(-1), static_cast<uint32_t>(-1));
+std::pair<uint32_t, uint32_t> prev_gop_gem_handle(static_cast<uint32_t>(0), static_cast<uint32_t>(0));
+std::pair<uint32_t, uint32_t> prev_mop_gem_handle(static_cast<uint32_t>(0), static_cast<uint32_t>(0));
 
 
 std::shared_ptr<GpuGraphicEffect> g_stdOsdGpuGfx;
 std::shared_ptr<GpuGraphicEffect> g_stdVideoGpuGfx;
 std::shared_ptr<GpuGraphicEffect> g_stdHdmiRxGpuGfx;
 
-Rect g_RectDisplayRegion;
+Rect g_RectDisplayRegion[2]; //0 for osd,1 for video
 
 LIST_HEAD(g_HeadListSclOutput);
 LIST_HEAD(g_HeadListGpuGfxInput);
@@ -912,25 +916,29 @@ unsigned int AddDmabufToDRM(stDmaBuf_t* pstDmaBuf)
     int ret = -1;
     drm_buf_t *drm_buf = (drm_buf_t *)pstDmaBuf->priavte;
     unsigned int pitches[4] = {0}, offsets[4] = {0}, gem_handles[4] = {0};
+    uint64_t modifiers[4] = {0};
     unsigned int width = 0, height = 0, fb_id = 0, drm_fmt = 0;
 
-    width = MIN(pstDmaBuf->width, g_stDrmCfg.width);
-    height = MIN(pstDmaBuf->height, g_stDrmCfg.height);
+    width = pstDmaBuf->width;//MIN(pstDmaBuf->width, g_stDrmCfg.width);
+    height = pstDmaBuf->height;//MIN(pstDmaBuf->height, g_stDrmCfg.height);
 
     if(pstDmaBuf->format  == E_STREAM_YUV420)
     {
-        pitches[0] = pstDmaBuf->width;
-        pitches[1] = pstDmaBuf->width;
-        offsets[0] = 0;
-        offsets[1] = pitches[0] * height;
+        pitches[0] = pstDmaBuf->stride[0];
+        pitches[1] = pstDmaBuf->stride[1];
+        offsets[0] = pstDmaBuf->dataOffset[0];
+        offsets[1] = pstDmaBuf->dataOffset[1];
+        modifiers[0] = pstDmaBuf->modifiers;
+        modifiers[1] = pstDmaBuf->modifiers;
         drm_fmt = DRM_FORMAT_NV12;
     }
     if(pstDmaBuf->format  == E_STREAM_ABGR8888)
     {
         //width = g_u32UiWidth;
         //height = g_u32UiHeight;
-        pitches[0] = pstDmaBuf->width * 4;
-        offsets[0] = 0;
+        pitches[0] = pstDmaBuf->stride[0];
+        offsets[0] = pstDmaBuf->dataOffset[0];
+        modifiers[0] = pstDmaBuf->modifiers;
         drm_fmt = DRM_FORMAT_ABGR8888;
     }
 
@@ -939,9 +947,28 @@ unsigned int AddDmabufToDRM(stDmaBuf_t* pstDmaBuf)
         printf("drmPrimeFDToHandle failed, ret=%d dma_buffer_fd=%d\n", ret, pstDmaBuf->fds[0]);
         return -1;
     }
-    gem_handles[1] = gem_handles[0];
-
-    ret = drmModeAddFB2(g_stDrmCfg.fd, width, height, drm_fmt, gem_handles, pitches, offsets, &fb_id, 0);
+    //printf("g_stDrmCfg.has_modifiers=%d\n", g_stDrmCfg.has_modifiers);
+    if(modifiers[0] == 0)
+    {
+        gem_handles[1] = gem_handles[0];
+        ret = drmModeAddFB2(g_stDrmCfg.fd, width, height, drm_fmt, gem_handles, pitches, offsets, &fb_id, 0);
+        if (ret)
+        {
+            printf("drmModeAddFB2 failed, ret=%d fb_id=%d\n", ret, fb_id);
+            return -1;
+        }
+    }
+    else
+    {
+        ret = drmModeAddFB2WithModifiers(g_stDrmCfg.fd, width, height, drm_fmt, gem_handles, pitches,
+                                        offsets, modifiers, &fb_id, DRM_MODE_FB_MODIFIERS);
+        if (ret)
+        {
+            printf("drmModeAddFB2WithModifiers failed, ret=%d width=%d,height=%d pitches=%d offsets=%d DRM_MODE_FB_MODIFIERS=%d modifiers=%lld\n",
+                    ret, width,height,pitches[0],offsets[0],DRM_MODE_FB_MODIFIERS,modifiers[0]);
+            return -1;
+        }
+    }
     //printf("add fb:\n w=%d,h=%d,fmt=%d\n", width, height, drm_fmt);
     for(int i = 0;i < 4; i++)
     {
@@ -949,12 +976,6 @@ unsigned int AddDmabufToDRM(stDmaBuf_t* pstDmaBuf)
         {
             //printf("%d : handle = %d  pitches = %d  offset = %d\n", i, gem_handles[i], pitches[i], offsets[i]);
         }
-    }
-
-    if (ret)
-    {
-        printf("drmModeAddFB2 failed, ret=%d fb_id=%d\n", ret, fb_id);
-        return -1;
     }
     drm_buf->fb_id = fb_id;
     drm_buf->gem_handle[0] = gem_handles[0];
@@ -969,7 +990,7 @@ static int drm_free_gem_handle(std::pair<uint32_t, uint32_t> *gem_handle) {
     uint32_t fb_id = gem_handle->first;
     gem_close.handle = gem_handle->second;
 
-    if (fb_id == static_cast<uint32_t>(-1) || gem_close.handle == static_cast<uint32_t>(-1)) {
+    if (fb_id == static_cast<uint32_t>(0) || gem_close.handle == static_cast<uint32_t>(0)) {
         return 0;
     }
 
@@ -979,15 +1000,14 @@ static int drm_free_gem_handle(std::pair<uint32_t, uint32_t> *gem_handle) {
     }
     ret |= drmIoctl(g_stDrmCfg.fd, DRM_IOCTL_GEM_CLOSE, &gem_close);
     if (ret != 0) {
-        printf("Failed to close gem handle %d \n", gem_close.handle);
-        return -1;
+        printf("Failed to close gem handle %d ret=%d fb_id=%d\n", gem_close.handle,ret,fb_id);
     }
-    gem_handle->first = static_cast<uint32_t>(-1);
-    gem_handle->second = static_cast<uint32_t>(-1);
+    gem_handle->first = static_cast<uint32_t>(0);
+    gem_handle->second = static_cast<uint32_t>(0);
     return 0;
 }
 
-static int atomic_set_plane(int osd_fb_id, int video_fb_id, int clear_osd, int clear_video, int is_realtime) {
+static int atomic_set_plane(unsigned int osd_fb_id, unsigned int video_fb_id, int clear_osd, int clear_video, int is_realtime) {
     int ret;
     drmModeAtomicReqPtr req;
     req = drmModeAtomicAlloc();
@@ -995,13 +1015,10 @@ static int atomic_set_plane(int osd_fb_id, int video_fb_id, int clear_osd, int c
         printf("drmModeAtomicAlloc failed \n");
         return -1;
     }
-    if(clear_osd == 1)
+
+    if(!g_stDrmCfg.osd_commited && (osd_fb_id > 0))
     {
-        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].FB_ID, 0);
-        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_ID, 0);
-    }
-    else if(osd_fb_id > 0 )//&& !g_stDrmCfg.osd_commited)
-    {
+        g_stDrmCfg.osd_commited = 1;
         add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].FB_ID , osd_fb_id);
         add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_ID, g_stDrmCfg.crtc_id);
         add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_X, 0);
@@ -1014,14 +1031,24 @@ static int atomic_set_plane(int osd_fb_id, int video_fb_id, int clear_osd, int c
         add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].SRC_H, g_stDrmCfg.height << 16);
         //add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].zpos , 2);
     }
-
-    if(clear_video == 1)
+    else if((clear_osd == 0) && (osd_fb_id > 0)  && (osd_fb_id != prev_gop_gem_handle.first))
     {
-        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].FB_ID, 0);
-        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_ID, 0);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].FB_ID, osd_fb_id);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_ID, g_stDrmCfg.crtc_id);
     }
-    else if(video_fb_id > 0 )//&& !g_stDrmCfg.mop_commited)
+    else if(clear_osd == 1)
     {
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].FB_ID, 0);
+        add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_ID, 0);
+    }
+    else
+    {
+        //printf("gop prev_gop_gem_handle.first=%d osd_fb_id=%d clear_osd=%d\n",prev_gop_gem_handle.first, osd_fb_id,clear_osd);
+    }
+
+    if(!g_stDrmCfg.mop_commited && (video_fb_id > 0))
+    {
+        g_stDrmCfg.mop_commited = 1;
         add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].FB_ID, video_fb_id);
         add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_ID, g_stDrmCfg.crtc_id);
         add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_X, 0);
@@ -1034,22 +1061,34 @@ static int atomic_set_plane(int osd_fb_id, int video_fb_id, int clear_osd, int c
         add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].SRC_H, g_stDrmCfg.height << 16);
         //add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].zpos , 18);
     }
+    else if((clear_video == 0) && (video_fb_id > 0) && (video_fb_id != prev_mop_gem_handle.first))
+    {
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].FB_ID, video_fb_id);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_ID, g_stDrmCfg.crtc_id);
+    }
+    else if(clear_video == 1)
+    {
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].FB_ID, 0);
+        add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_ID, 0);
+    }
+    else
+    {
+        //printf("mop prev_mop_gem_handle.first=%d video_fb_id=%d \n",prev_mop_gem_handle.first, video_fb_id);
+    }
+
 
     if(is_realtime)
     {
         //add_plane_property(req, plane_id, "realtime_mode", 1);
     }
-    //printf("[atomic_set_plane]ret=%d x=%d y=%d out_width=%d out_height=%d\n",
-    //    ret,_g_MediaPlayer.video_info.pos_x,_g_MediaPlayer.video_info.pos_y,_g_MediaPlayer.video_info.out_width,_g_MediaPlayer.video_info.out_height);
-
 
     drmModeAtomicAddProperty(req, g_stDrmCfg.crtc_id, g_stDrmCfg.drm_mode_prop_ids[1].FENCE_ID, (uint64_t)&g_stDrmCfg.out_fence);//use this flag,must be close out_fence
 
     ret = drmModeAtomicCommit(g_stDrmCfg.fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
     if(ret != 0)
     {
-        printf("[atomic_set_plane]drmModeAtomicCommit failed ret=%d x=%d y=%d out_width=%d out_height=%d\n",
-            ret,_g_MediaPlayer.video_info.pos_x,_g_MediaPlayer.video_info.pos_y,_g_MediaPlayer.video_info.out_width,_g_MediaPlayer.video_info.out_height);
+        printf("[atomic_set_plane]drmModeAtomicCommit failed,ret=%d out_width=%d out_height=%d\n",
+            ret,_g_MediaPlayer.video_info.out_width,_g_MediaPlayer.video_info.out_height);
     }
 
     drmModeAtomicFree(req);
@@ -1077,8 +1116,12 @@ static int mm_cal_video_size(video_info_t *video_info, int pic_width, int pic_he
     int sar_4_3_height  = 0;
     int origin_width    = 0;
     int origin_height   = 0;
+    int auto_width      = 0;
+    int auto_height     = 0;
+
     double video_ratio  = 1.0 * pic_width / pic_height;
     double panel_ratio  = 1.0 * video_info->in_width / video_info->in_height;
+
 
     if (panel_ratio > 1.78) {
         sar_16_9_width  = ALIGN_UP(video_info->in_height * 16 / 9, 2);
@@ -1105,6 +1148,15 @@ static int mm_cal_video_size(video_info_t *video_info, int pic_width, int pic_he
     }
     //printf("panel_ratio=%f video_ratio=%f pic_width w/h=[%d %d], video_info w/h=[%d %d], origin_width w/h=[%d %d] \n",
     //                    panel_ratio,video_ratio,pic_width,pic_height,video_info->in_width,video_info->in_height,origin_width,origin_height);
+
+    if (panel_ratio / video_ratio > 1.0) {
+        auto_height = video_info->in_height;
+        auto_width  = ALIGN_UP(auto_height * pic_width / pic_height, 2);
+    } else {
+        auto_width  = video_info->in_width;
+        auto_height = ALIGN_UP(auto_width * pic_height / pic_width, 2);
+    }
+
 
     screen_width  = video_info->in_width;
     screen_height = video_info->in_height;
@@ -1134,6 +1186,14 @@ static int mm_cal_video_size(video_info_t *video_info, int pic_width, int pic_he
         }
         break;
 
+        case AV_AUTO_MODE : {
+            video_info->out_width  = auto_width;
+            video_info->out_height = auto_height;
+            video_info->dec_width  = MIN(auto_width , pic_width);
+            video_info->dec_height = MIN(auto_height, pic_height);
+        }
+        break;
+
         case AV_SCREEN_MODE :
         default : {
             video_info->out_width  = screen_width;
@@ -1147,8 +1207,8 @@ static int mm_cal_video_size(video_info_t *video_info, int pic_width, int pic_he
     video_info->dec_width  = ALIGN_UP(video_info->dec_width, 2);
     video_info->dec_height = ALIGN_UP(video_info->dec_height, 2);
 
-    printf("origin w/h=[%d %d], screen w/h=[%d %d], sar4:3 w/h=[%d %d], sar16:9 w/h=[%d %d] panel_ratio=%f\n",
-        origin_width, origin_height, screen_width, screen_height, sar_4_3_width, sar_4_3_height, sar_16_9_width, sar_16_9_height,panel_ratio);
+    printf("origin w/h=[%d %d], screen w/h=[%d %d], sar4:3 w/h=[%d %d], sar16:9 w/h=[%d %d], auto w/h=[%d %d]\n",
+        origin_width, origin_height, screen_width, screen_height, sar_4_3_width, sar_4_3_height, sar_16_9_width, sar_16_9_height, auto_width, auto_height);
     printf("in w/h=[%d %d], dec w/h=[%d %d], rot w/h=[%d %d], out w/h=[%d %d]\n",
                 video_info->in_width, video_info->in_height, video_info->dec_width, video_info->dec_height,
                 video_info->rot_width, video_info->rot_height, video_info->out_width, video_info->out_height);
@@ -1185,9 +1245,34 @@ static int mm_cal_rotate_size(video_info_t *video_info)
     return 0;
 }
 
+static int sstar_set_ratio(int ratio)
+{
+    int ret;
+    if(ratio > AV_AUTO_MODE)
+    {
+        printf("Error:sstar_set_ratio=%d fail,please check param\n",_g_MediaPlayer.video_info.ratio);
+        return -1;
+    }
+    _g_MediaPlayer.video_info.ratio = ratio;
+    printf("sstar_set_ratio=%d \n",_g_MediaPlayer.video_info.ratio);
+
+    // set video size in user mode
+    ret = mm_cal_video_size(&_g_MediaPlayer.video_info, _g_MediaPlayer.stream_width, _g_MediaPlayer.stream_height);
+    if (ret < 0) {
+        printf("set_video_size error!\n");
+        return -1;
+    }
+
+    // set video size by rotate
+    mm_cal_rotate_size(&_g_MediaPlayer.video_info);
+    printf("mm_set_video_size  rotate=%d dec_width=%d dec_height=%d .\n",_g_MediaPlayer.video_info.rotate, _g_MediaPlayer.video_info.dec_width, _g_MediaPlayer.video_info.dec_height);
+
+    mm_player_set_dec_out_attr(_g_MediaPlayer.video_info.dec_width, _g_MediaPlayer.video_info.dec_height);
+    return 0;
+}
+
 static int mm_set_video_size(seq_info_t *seq_info)
 {
-    int ret = 0;
     int strm_width = 0;
     int strm_height = 0;
 
@@ -1200,33 +1285,12 @@ static int mm_set_video_size(seq_info_t *seq_info)
     }
 
     // reset in width/height
+    _g_MediaPlayer.stream_width = strm_width;
+    _g_MediaPlayer.stream_height = strm_height;
+    _g_MediaPlayer.video_info.in_width  = _g_MediaPlayer.param.panel_width;
+    _g_MediaPlayer.video_info.in_height = _g_MediaPlayer.param.panel_height;
 
-    if (_g_MediaPlayer.video_info.rotate != AV_ROTATE_NONE && _g_MediaPlayer.video_info.rotate != AV_ROTATE_180) {
-
-        _g_MediaPlayer.video_info.in_width  = _g_MediaPlayer.param.panel_height;
-        _g_MediaPlayer.video_info.in_height = _g_MediaPlayer.param.panel_width;
-
-    } else {
-
-        _g_MediaPlayer.video_info.in_width  = _g_MediaPlayer.param.panel_width;
-        _g_MediaPlayer.video_info.in_height = _g_MediaPlayer.param.panel_height;
-
-
-    }
-
-    // set video size in user mode
-    ret = mm_cal_video_size(&_g_MediaPlayer.video_info, strm_width, strm_height);
-    if (ret < 0) {
-        printf("set_video_size error!\n");
-        return -1;
-    }
-
-    // set video size by rotate
-    mm_cal_rotate_size(&_g_MediaPlayer.video_info);
-    printf("mm_set_video_size  rotate=%d dec_width=%d dec_height=%d .\n",_g_MediaPlayer.video_info.rotate, _g_MediaPlayer.video_info.dec_width, _g_MediaPlayer.video_info.dec_height);
-
-    mm_player_set_dec_out_attr(_g_MediaPlayer.video_info.dec_width, _g_MediaPlayer.video_info.dec_height);
-
+    sstar_set_ratio(_g_MediaPlayer.video_info.ratio);
     return 0;
 }
 
@@ -1274,6 +1338,7 @@ static MI_S32 sstar_init_drm()
     /************************************************
     step :init DRM(DISP)
     *************************************************/
+    g_stDrmCfg.has_modifiers = 1;
 
     g_stDrmCfg.fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
     if(g_stDrmCfg.fd < 0)
@@ -1680,13 +1745,31 @@ static void sstar_hdmirx_context_init()
 static void sstar_media_context_init()
 {
     // set default ratio mode
-    _g_MediaPlayer.video_info.ratio = (int)AV_SCREEN_MODE;
+    //_g_MediaPlayer.video_info.ratio = (int)AV_SAR_16_9_MODE;
     _g_MediaPlayer.param.protocol = AV_PROTOCOL_FILE;
 
     // set default disp windows size
-    _g_MediaPlayer.param.panel_width = g_stDrmCfg.width;
-    _g_MediaPlayer.param.panel_height = g_stDrmCfg.height;
     _g_MediaPlayer.param.url = g_InputFile;
+
+
+    if (_g_MediaPlayer.video_info.rotate != AV_ROTATE_NONE && _g_MediaPlayer.video_info.rotate != AV_ROTATE_180) {
+
+        _g_MediaPlayer.param.panel_width = g_stDrmCfg.height;//1920
+        _g_MediaPlayer.param.panel_height = g_stDrmCfg.width;//1080
+        //_g_MediaPlayer.video_info.in_width  = _g_MediaPlayer.param.panel_height;
+       // _g_MediaPlayer.video_info.in_height = _g_MediaPlayer.param.panel_width;
+
+    } else {
+        _g_MediaPlayer.param.panel_width = g_stDrmCfg.width;//1080
+        _g_MediaPlayer.param.panel_height = g_stDrmCfg.height;//1920
+        //_g_MediaPlayer.video_info.in_width  = _g_MediaPlayer.param.panel_width;
+        //_g_MediaPlayer.video_info.in_height = _g_MediaPlayer.param.panel_height;
+
+
+    }
+
+    _g_MediaPlayer.video_info.in_width  = _g_MediaPlayer.param.panel_width;
+    _g_MediaPlayer.video_info.in_height = _g_MediaPlayer.param.panel_height;
 
     mm_player_set_opts("audio_format", "", AV_PCM_FMT_S16);
     mm_player_set_opts("audio_channels", "", 2);
@@ -1735,8 +1818,19 @@ void *sstar_DrmCommit_Thread(void * arg)
     std::shared_ptr<GpuGraphicBuffer> videoCommitBuf;
     memset(&osd_drm_buf, 0x00, sizeof(drm_buf_t));
     memset(&video_drm_buf, 0x00, sizeof(drm_buf_t));
+    int mop_clear;
+    int osd_clear;
+    //unsigned long eTime1;
+    //unsigned long eTime2;
+    //unsigned long eTime3;
+    //struct timeval timeEnqueue1;
+    //int ret;
+
     while(g_bThreadExitCommit)
     {
+
+        //gettimeofday(&timeEnqueue1, NULL);
+        //eTime1 =timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
         if(!(list_empty(&g_HeadListOsdCommit)))
         {
             ListOsdCommit = list_first_entry(&g_HeadListOsdCommit, St_ListOutBufNode_t, list);
@@ -1744,28 +1838,38 @@ void *sstar_DrmCommit_Thread(void * arg)
             osdCommitBuf = ListOsdCommit->pOutBuffer;
             list_del(&(ListOsdCommit->list));
             pthread_mutex_unlock(&ListOsdCommit->EntryMutex);
-            list_add_tail(&ListOsdCommit->list, &g_HeadListOsdOutput);
-
-            osd_OutputBuf.width   = osdCommitBuf->getWidth();
-            osd_OutputBuf.height  = osdCommitBuf->getHeight();
-            osd_OutputBuf.format  = E_STREAM_ABGR8888;
-            osd_OutputBuf.fds[0]  = osdCommitBuf->getFd();
-            osd_OutputBuf.stride[0] = osdCommitBuf->getWidth() * 4;
-            osd_OutputBuf.dataOffset[0] = 0;
-            osd_OutputBuf.priavte = (void *)&osd_drm_buf;
-            AddDmabufToDRM(&osd_OutputBuf);
-            #if 0
-                FILE *file_fd;
-                file_fd = open_dump_file("customer/test_rgb_dump.bin");
-                void * pVaddr = NULL;
-                pVaddr = mmap(NULL, osdCommitBuf->getBufferSize(), PROT_WRITE|PROT_READ, MAP_SHARED, osdCommitBuf->getFd(), 0);
-                if(!pVaddr) {
-                    printf("Failed to mmap dma buffer\n");
-                    return NULL;
-                }
-                wirte_dump_file(file_fd, (char *)pVaddr,osdCommitBuf->getWidth()*osdCommitBuf->getHeight()*4);
-                close_dump_file(file_fd);
-            #endif
+            if(osdCommitBuf != NULL)
+            {
+                list_add_tail(&ListOsdCommit->list, &g_HeadListOsdOutput);
+                osd_OutputBuf.width   = osdCommitBuf->getWidth();
+                osd_OutputBuf.height  = osdCommitBuf->getHeight();
+                osd_OutputBuf.format  = E_STREAM_ABGR8888;
+                osd_OutputBuf.fds[0]  = osdCommitBuf->getFd();
+                osd_OutputBuf.stride[0] = osdCommitBuf->getStride()[0];
+                osd_OutputBuf.modifiers = osdCommitBuf->getModifier();
+                osd_OutputBuf.dataOffset[0] = 0;
+                osd_OutputBuf.priavte = (void *)&osd_drm_buf;
+                AddDmabufToDRM(&osd_OutputBuf);
+                osd_clear = 0;
+                #if 0
+                    FILE *file_fd;
+                    file_fd = open_dump_file("customer/test_rgb_dump.bin");
+                    void * pVaddr = NULL;
+                    pVaddr = mmap(NULL, osdCommitBuf->getBufferSize(), PROT_WRITE|PROT_READ, MAP_SHARED, osdCommitBuf->getFd(), 0);
+                    if(!pVaddr) {
+                        printf("Failed to mmap dma buffer\n");
+                        return NULL;
+                    }
+                    wirte_dump_file(file_fd, (char *)pVaddr,osdCommitBuf->getWidth()*osdCommitBuf->getHeight()*4);
+                    close_dump_file(file_fd);
+                #endif
+            }
+            else
+            {
+                 //clear osd plane
+                 osd_drm_buf.fb_id = 0;
+                 osd_clear = 1;
+            }
         }
 
         if(!(list_empty(&g_HeadListVideoCommit)))
@@ -1775,63 +1879,94 @@ void *sstar_DrmCommit_Thread(void * arg)
             videoCommitBuf = ListVideoCommit->pOutBuffer;
             list_del(&(ListVideoCommit->list));
             pthread_mutex_unlock(&ListVideoCommit->EntryMutex);
-            list_add_tail(&ListVideoCommit->list, &g_HeadListVideoOutput);
-            video_OutputBuf.width   = videoCommitBuf->getWidth();
-            video_OutputBuf.height  = videoCommitBuf->getHeight();
-            video_OutputBuf.format  = E_STREAM_YUV420;
-            video_OutputBuf.fds[0]  = videoCommitBuf->getFd();
-            video_OutputBuf.fds[1]  = videoCommitBuf->getFd();
-            video_OutputBuf.stride[0] = videoCommitBuf->getWidth();
-            video_OutputBuf.stride[1] = videoCommitBuf->getWidth();
-            video_OutputBuf.dataOffset[0] = 0;
-            video_OutputBuf.dataOffset[1] = video_OutputBuf.width * video_OutputBuf.height;
-            video_OutputBuf.priavte = (void *)&video_drm_buf;
-#if 0
-            printf("commit getWidth=%d getHeight=%d \n",videoCommitBuf->getWidth(),videoCommitBuf->getHeight());
-            if(!dump_count)
+            if(videoCommitBuf != NULL)
             {
-                dump_count = 1;
-                FILE *file_fd;
-                file_fd = open_dump_file("/customer/test_yuv_dump.bin");
-                void * pVaddr = NULL;
-                pVaddr = mmap(NULL, videoCommitBuf->getBufferSize(), PROT_WRITE|PROT_READ, MAP_SHARED, videoCommitBuf->getFd(), 0);
-                if(!pVaddr) {
-                    printf("Failed to mmap dma buffer\n");
-                    return NULL;
+                //gettimeofday(&timeEnqueue1, NULL);
+                //eTime2 =timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
+                //printf("commit time2=%d \n", (eTime2 - eTime1));
+                list_add_tail(&ListVideoCommit->list, &g_HeadListVideoOutput);
+                video_OutputBuf.width   = videoCommitBuf->getWidth();
+                video_OutputBuf.height  = videoCommitBuf->getHeight();
+                video_OutputBuf.format  = E_STREAM_YUV420;
+                video_OutputBuf.fds[0]  = videoCommitBuf->getFd();
+                video_OutputBuf.fds[1]  = videoCommitBuf->getFd();
+                video_OutputBuf.stride[0] = videoCommitBuf->getStride()[0];
+                video_OutputBuf.stride[1] = videoCommitBuf->getStride()[1];
+                video_OutputBuf.modifiers = videoCommitBuf->getModifier();
+                video_OutputBuf.dataOffset[0] = 0;
+                video_OutputBuf.dataOffset[1] = video_OutputBuf.stride[0] * video_OutputBuf.height;
+                video_OutputBuf.priavte = (void *)&video_drm_buf;
+#if 0
+                printf("commit getWidth=%d getHeight=%d \n",videoCommitBuf->getWidth(),videoCommitBuf->getHeight());
+                if(!dump_count)
+                {
+                    dump_count = 1;
+                    FILE *file_fd;
+                    file_fd = open_dump_file("/customer/test_yuv_dump.bin");
+                    void * pVaddr = NULL;
+                    pVaddr = mmap(NULL, videoCommitBuf->getBufferSize(), PROT_WRITE|PROT_READ, MAP_SHARED, videoCommitBuf->getFd(), 0);
+                    if(!pVaddr) {
+                        printf("Failed to mmap dma buffer\n");
+                        return NULL;
+                    }
+                    wirte_dump_file(file_fd, (char *)pVaddr, videoCommitBuf->getBufferSize());
+                    close_dump_file(file_fd);
                 }
-                wirte_dump_file(file_fd, (char *)pVaddr, videoCommitBuf->getBufferSize());
-                close_dump_file(file_fd);
-            }
 #endif
-
-            AddDmabufToDRM(&video_OutputBuf);
+                AddDmabufToDRM(&video_OutputBuf);
+                mop_clear = 0;
+            }
+            else
+            {
+                //clear video plane
+                video_drm_buf.fb_id = 0;
+                mop_clear = 1;
+                printf("clear mop \n");
+            }
         }
-
-        atomic_set_plane(osd_drm_buf.fb_id, video_drm_buf.fb_id, 0, 0, 0);
-
-        if(video_drm_buf.fb_id > 0)
+        if((prev_mop_gem_handle.first != video_drm_buf.fb_id) || (prev_gop_gem_handle.first != osd_drm_buf.fb_id))
         {
-            drm_free_gem_handle(&prev_mop_gem_handle);
-            prev_mop_gem_handle.first = video_drm_buf.fb_id;
-            prev_mop_gem_handle.second = video_drm_buf.gem_handle[0];
-            video_drm_buf.fb_id = 0;
-        }
-        if(osd_drm_buf.fb_id > 0)
-        {
-            drm_free_gem_handle(&prev_gop_gem_handle);
-            prev_gop_gem_handle.first = osd_drm_buf.fb_id;
-            prev_gop_gem_handle.second = osd_drm_buf.gem_handle[0];
-            osd_drm_buf.fb_id = 0;
+            atomic_set_plane(osd_drm_buf.fb_id, video_drm_buf.fb_id, osd_clear, mop_clear, 0);
+            if((prev_mop_gem_handle.first != video_drm_buf.fb_id) && (video_drm_buf.fb_id > 0))
+            {
+                drm_free_gem_handle(&prev_mop_gem_handle);
+                prev_mop_gem_handle.first = video_drm_buf.fb_id;
+                prev_mop_gem_handle.second = video_drm_buf.gem_handle[0];
+            }
+            if((prev_gop_gem_handle.first != osd_drm_buf.fb_id) && (osd_drm_buf.fb_id > 0))
+            {
+                drm_free_gem_handle(&prev_gop_gem_handle);
+                prev_gop_gem_handle.first = osd_drm_buf.fb_id;
+                prev_gop_gem_handle.second = osd_drm_buf.gem_handle[0];
+            }
         }
 
+        //gettimeofday(&timeEnqueue1, NULL);
+        //eTime3 =timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
+        //printf("commit time3=%d \n", (eTime3 - eTime1));
     }
-    atomic_set_plane(osd_drm_buf.fb_id, video_drm_buf.fb_id, 0, 1, 0); //Hide video plane
-
     printf("sstar_DrmCommit_Thread exit\n");
     return NULL;
 }
 
 
+void sstar_clear_plane(int plane)
+{
+    St_ListOutBufNode_t *entryNode;
+    entryNode = new St_ListOutBufNode_t;
+    entryNode->pOutBuffer = NULL;
+    entryNode->EntryMutex = PTHREAD_MUTEX_INITIALIZER;
+    if(plane == GOP_UI_ID)
+    {
+        printf("Clear osd \n");
+        list_add_tail(&entryNode->list, &g_HeadListOsdCommit);
+    }
+    else
+    {
+        printf("Clear mop \n");
+        list_add_tail(&entryNode->list, &g_HeadListVideoCommit);
+    }
+}
 
 
 void *sstar_OsdProcess_Thread(void * arg)
@@ -1839,7 +1974,7 @@ void *sstar_OsdProcess_Thread(void * arg)
     int ret;
     int BigUiWidth = g_stDrmCfg.width;
     int BigUiHeight = g_stDrmCfg.height;
-    int align_width = ALIGN_UP(BigUiWidth,16);
+    int align_stride;
     int SmallUiWidth  = _g_MediaPlayer.ui_info.in_width;
     int SmallUiHeight = _g_MediaPlayer.ui_info.in_height;
     uint32_t tmpData;
@@ -1853,6 +1988,11 @@ void *sstar_OsdProcess_Thread(void * arg)
     uint32_t* SmallUiImageData  = (uint32_t*)malloc(SmallUiWidth * SmallUiHeight * sizeof(uint32_t));
     memset((void *)BigUiImageData, 0x00, BigUiWidth * BigUiHeight * sizeof(uint32_t) );
     memset((void *)SmallUiImageData, 0x00, SmallUiWidth * SmallUiHeight * sizeof(uint32_t));
+
+    g_RectDisplayRegion[0].left = 0;
+    g_RectDisplayRegion[0].top = 0;
+    g_RectDisplayRegion[0].right = g_stDrmCfg.width;
+    g_RectDisplayRegion[0].bottom = g_stDrmCfg.height;
 
     file = fopen(g_InputUiPath, "r+");
     if (file)
@@ -1909,9 +2049,9 @@ void *sstar_OsdProcess_Thread(void * arg)
     uint32_t u32UiFormat;
     u32UiFormat = DRM_FORMAT_ABGR8888;
     char *pVaddr = nullptr;
-    g_stdOsdGpuGfx = sstar_gpugfx_context_init(ALIGN_UP(g_stDrmCfg.width,16), g_stDrmCfg.height, u32UiFormat);
-
-    inputBuffer = std::make_shared<GpuGraphicBuffer>(align_width, BigUiHeight, u32UiFormat, align_width * 4);
+    g_stdOsdGpuGfx = sstar_gpugfx_context_init(g_stDrmCfg.width, g_stDrmCfg.height, u32UiFormat);
+    align_stride = ALIGN_UP(BigUiWidth * 4, 64);
+    inputBuffer = std::make_shared<GpuGraphicBuffer>(BigUiWidth, BigUiHeight, u32UiFormat, ALIGN_UP(BigUiWidth * 4, 64));
     if (!inputBuffer->initCheck()) {
         printf("Create GpuGraphicBuffer failed\n");
         return NULL;
@@ -1927,29 +2067,36 @@ void *sstar_OsdProcess_Thread(void * arg)
 
     for(int i=0 ;i < BigUiHeight;i++)
     {
-        memcpy(pVaddr + (i * align_width * 4), (char *)BigUiImageData + (i * BigUiWidth * 4), BigUiWidth * 4);
+        memcpy(pVaddr + (i * align_stride), (char *)BigUiImageData + (i * BigUiWidth * 4), BigUiWidth * 4);
     }
     inputBuffer->flushCache(READWRITE);
-    drmVBlank vbl;
+    //drmVBlank vbl;
+    if(_g_MediaPlayer.rotate == 1)
+    {
+        g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_90);
+    }
+    else if(_g_MediaPlayer.rotate == 2)
+    {
+        g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_180);
+    }
+    else if(_g_MediaPlayer.rotate == 3)
+    {
+        g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_270);
+    }
+
+    //unsigned long eTime1;
+    //unsigned long eTime2;
+    //unsigned long eTime3;
+    //struct timeval timeEnqueue1;
 
     while(g_bThreadExitUiDrm == TRUE)
     {
-        if(_g_MediaPlayer.rotate == 1)
-        {
-            g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_90);
-        }
-        else if(_g_MediaPlayer.rotate == 2)
-        {
-            g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_180);
-        }
-        else if(_g_MediaPlayer.rotate == 3)
-        {
-            g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_270);
-        }
+
         if(!(list_empty(&g_HeadListOsdOutput)))
         {
             ListOsdOutput = list_first_entry(&g_HeadListOsdOutput, St_ListOutBufNode_t, list);
             pthread_mutex_lock(&ListOsdOutput->EntryMutex);
+        #if 0
             vbl.request.type = DRM_VBLANK_RELATIVE;
             vbl.request.sequence = 1; // 等待下一个 VBlank
             vbl.request.signal = NULL;
@@ -1959,28 +2106,38 @@ void *sstar_OsdProcess_Thread(void * arg)
                 printf("Error waiting for VBlank: %d\n", ret);
                 continue;
             }
-            ret = g_stdOsdGpuGfx->process(inputBuffer, g_RectDisplayRegion, ListOsdOutput->pOutBuffer);
+        #endif
+            //gettimeofday(&timeEnqueue1, NULL);
+            //eTime1 =timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
+            ret = g_stdOsdGpuGfx->process(inputBuffer, g_RectDisplayRegion[0], ListOsdOutput->pOutBuffer);
             if (ret)
             {
                 printf("Osd:Gpu graphic effect process failed\n");
                 return NULL;
             }
+            //gettimeofday(&timeEnqueue1, NULL);
+            //eTime2 =timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
+            //if((eTime2 - eTime1) >= 16)
+            //{
+            //    printf("process0 time=%d \n", (eTime2 - eTime1));
+            //}
             list_del(&(ListOsdOutput->list));
             pthread_mutex_unlock(&ListOsdOutput->EntryMutex);
             list_add_tail(&ListOsdOutput->list, &g_HeadListOsdCommit);
-            //usleep(16 * 1000);
+            usleep(33 * 1000);
 
         }
         else
         {
             //printf("g_HeadListOsdOutput list is empty\n");
-            usleep(60 * 1000);
+            usleep(5 * 1000);
         }
 
 
     }
     inputBuffer->unmap(pVaddr, READWRITE);
     inputBuffer = nullptr;
+    sstar_clear_plane(GOP_UI_ID);
     g_stdOsdGpuGfx->deinit();
 
     return NULL;
@@ -2082,6 +2239,11 @@ void *sstar_HdmiRxProcess_Thread(void * param)
     uint32_t u32Width  = ALIGN_UP(g_stDrmCfg.width,16);
     uint32_t u32Height = g_stDrmCfg.height;
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
+
+    g_RectDisplayRegion[1].left = 0;
+    g_RectDisplayRegion[1].top = 0;
+    g_RectDisplayRegion[1].right = ALIGN_UP(g_stDrmCfg.width,16);
+    g_RectDisplayRegion[1].bottom = g_stDrmCfg.height;
     g_stdHdmiRxGpuGfx = sstar_gpugfx_context_init(u32Width, u32Height, u32GpuInputFormat);
 
     struct timeval tv;
@@ -2182,7 +2344,7 @@ void *sstar_HdmiRxProcess_Thread(void * param)
                     g_stdHdmiRxGpuGfx->updateTransformStatus(Transform :: NONE);
                 }
 #endif
-                s32Ret = g_stdHdmiRxGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion, ListVideoOutput->pOutBuffer);
+                s32Ret = g_stdHdmiRxGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion[1], ListVideoOutput->pOutBuffer);
 
                 if (s32Ret) {
                     printf("Gpu graphic effect process failed\n");
@@ -2224,31 +2386,52 @@ void *sstar_VideoProcess_Thread(void * arg)
     uint32_t frame_offset[3];
     int ret;
     std::shared_ptr<GpuGraphicBuffer> GfxInputBuffer;
-
+#if 1
     /************************************************
     step :init GPU
     *************************************************/
-    uint32_t u32Width  = ALIGN_UP(g_stDrmCfg.width,16);
+    uint32_t u32Width  = g_stDrmCfg.width;
     uint32_t u32Height = g_stDrmCfg.height;
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
     g_stdVideoGpuGfx = sstar_gpugfx_context_init(u32Width, u32Height, u32GpuInputFormat);
+#endif
+#if 0
     drmVBlank vbl;
+    unsigned long eTime0;
+    unsigned long eTime1;
+    unsigned long eTime2;
+    unsigned long eTime3;
+    struct timeval timeEnqueue1;
+#endif
+    if(_g_MediaPlayer.rotate == 1)
+    {
+        g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_90);
+    }
+    else if(_g_MediaPlayer.rotate == 2)
+    {
+        g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_180);
+    }
+    else if(_g_MediaPlayer.rotate == 3)
+    {
+        g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_270);
+    }
+    else
+    {
+        g_stdVideoGpuGfx->updateTransformStatus(Transform :: NONE);
+    }
+
 
     while(g_bThreadExitGfx == TRUE)
     {
-
-        if( _g_MediaPlayer.player_working && !(list_empty(&g_HeadListVideoOutput)))
+        if(_g_MediaPlayer.player_working && !(list_empty(&g_HeadListVideoOutput)))
         {
             ret = mm_player_get_video_frame(&frame_info);
             if (ret < 0) {
-                usleep(10 * 1000);
+                usleep(5 * 1000);
                 continue;
             }
             if (frame_info.format == AV_PIXEL_FMT_NV12)
             {
-                _g_MediaPlayer.video_info.out_width = 1080;
-                _g_MediaPlayer.video_info.out_height = 1920;
-
                 frame_offset[0] = 0;  //y data
                 frame_offset[1] = frame_info.data[1] - frame_info.data[0];   //uv offset
                 GfxInputBuffer = std::make_shared<GpuGraphicBuffer>(frame_info.dma_buf_fd[0], frame_info.width, frame_info.height, u32GpuInputFormat, frame_info.stride, frame_offset);
@@ -2257,26 +2440,9 @@ void *sstar_VideoProcess_Thread(void * arg)
                     printf("Failed to turn dmabuf to GpuGraphicBuffer\n");
                     continue;
                 }
-
                 ListVideoOutput = list_first_entry(&g_HeadListVideoOutput, St_ListOutBufNode_t, list);
                 pthread_mutex_lock(&ListVideoOutput->EntryMutex);
-                if(_g_MediaPlayer.rotate == 1)
-                {
-                    g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_90);
-                }
-                else if(_g_MediaPlayer.rotate == 2)
-                {
-                    g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_180);
-                }
-                else if(_g_MediaPlayer.rotate == 3)
-                {
-                    g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_270);
-                }
-                else
-                {
-                    g_stdVideoGpuGfx->updateTransformStatus(Transform :: NONE);
-                }
-
+#if 0
                 vbl.request.type = DRM_VBLANK_RELATIVE;
                 vbl.request.sequence = 1; // 等待下一个 VBlank
                 vbl.request.signal = NULL;
@@ -2286,25 +2452,40 @@ void *sstar_VideoProcess_Thread(void * arg)
                     printf("Error waiting for VBlank: %d\n", ret);
                     continue;
                 }
-
-                ret = g_stdVideoGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion, ListVideoOutput->pOutBuffer);
+#endif
+                g_RectDisplayRegion[1].left = _g_MediaPlayer.video_info.pos_x;
+                g_RectDisplayRegion[1].top = _g_MediaPlayer.video_info.pos_y;
+                g_RectDisplayRegion[1].right = _g_MediaPlayer.video_info.pos_x + _g_MediaPlayer.video_info.out_width;
+                g_RectDisplayRegion[1].bottom = _g_MediaPlayer.video_info.pos_y + _g_MediaPlayer.video_info.out_height;
+                //printf("[x,y,w,h]=[%d,%d,%d,%d] frame_width,height=%d,%d \n",_g_MediaPlayer.video_info.pos_x,_g_MediaPlayer.video_info.pos_y,
+                //    _g_MediaPlayer.video_info.out_width,_g_MediaPlayer.video_info.out_height,frame_info.width,frame_info.height);
+                //gettimeofday(&timeEnqueue1, NULL);
+                //eTime1 =timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
+                ret = g_stdVideoGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion[1], ListVideoOutput->pOutBuffer);
                 if (ret) {
                     printf("Video:Gpu graphic effect process failed,dma_buf_fd=%d getBufferSize=%d\n", frame_info.dma_buf_fd[0], GfxInputBuffer->getBufferSize());
                     pthread_mutex_unlock(&ListVideoOutput->EntryMutex);
                     continue;
                 }
+                //gettimeofday(&timeEnqueue1, NULL);
+                //eTime2 =timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
+                //if((eTime2 - eTime0) >= 16)
+                //{
+                //    printf("process time=%d total=%d\n", (eTime2 - eTime1), (eTime2 - eTime0));
+                //}
                 list_del(&(ListVideoOutput->list));
                 pthread_mutex_unlock(&ListVideoOutput->EntryMutex);
                 list_add_tail(&ListVideoOutput->list, &g_HeadListVideoCommit);
             }
             mm_player_put_video_frame(&frame_info);
-
         }
         else
         {
-            usleep(10*1000);
+            usleep(3*1000);
         }
     }
+    sstar_clear_plane(MOPG_ID0);
+    printf("sstar_VideoProcess_Thread exit\n");
     g_stdVideoGpuGfx->deinit();
     return NULL;
 }
@@ -2553,10 +2734,11 @@ static MI_S32 sstar_HdmiPipeLine_Creat()
 
 static MI_S32 sstar_HdmiPipeLine_Destory()
 {
-    g_bThreadExitScl = false;
     if(g_pThreadScl)
     {
+        g_bThreadExitScl = false;
         pthread_join(g_pThreadScl, NULL);
+        g_bThreadExitScl = NULL;
     }
 
     /************************************************
@@ -2607,6 +2789,7 @@ static MI_S32 sstar_MediaPipeLine_Destroy()
     {
         g_bThreadExitPlayer = false;
         pthread_join(g_player_thread, NULL);
+        g_player_thread = NULL;
     }
 
     mm_player_close();
@@ -2626,12 +2809,6 @@ static MI_S32 sstar_BaseModule_Init()
         printf("init_queue_buf fail \n");
         return -1;
     }
-
-    g_RectDisplayRegion.left = 0;
-    g_RectDisplayRegion.top = 0;
-    g_RectDisplayRegion.right = ALIGN_UP(g_stDrmCfg.width,16);
-    g_RectDisplayRegion.bottom = g_stDrmCfg.height;
-
 
     if(bShowUi)
     {
@@ -2658,30 +2835,34 @@ static MI_S32 sstar_BaseModule_Init()
 static MI_S32 sstar_BaseModule_DeInit()
 {
 
-    g_bThreadExitUpdatePoint = false;
     if(g_pThreadUpdatePoint)
     {
+        g_bThreadExitUpdatePoint = false;
         pthread_join(g_pThreadUpdatePoint, NULL);
+        g_pThreadUpdatePoint = NULL;
     }
 
-    g_bThreadExitCommit = false;
     if(g_pThreadCommit)
     {
+        g_bThreadExitCommit = false;
         pthread_join(g_pThreadCommit, NULL);
+        g_pThreadCommit = NULL;
     }
 
-    g_bThreadExitGfx = false;
     if(g_pThreadGfx)
     {
+        g_bThreadExitGfx = false;
         pthread_join(g_pThreadGfx, NULL);
+        g_pThreadGfx = NULL;
     }
 
     if(bShowUi)
     {
-        g_bThreadExitUiDrm = false;
         if(g_pThreadUiDrm)
         {
+            g_bThreadExitUiDrm = false;
             pthread_join(g_pThreadUiDrm, NULL);
+            g_pThreadUiDrm = NULL;
         }
     }
 
@@ -2715,8 +2896,6 @@ MI_S32 parse_args(int argc, char **argv)
     g_u8PipelineMode = 0xff;
     for (int i = 0; i < argc; i++)
     {
-
-
         if (0 == strcmp(argv[i], "-m"))
         {
             g_u8PipelineMode = atoi(argv[i+1]);
@@ -2785,6 +2964,13 @@ MI_S32 parse_args(int argc, char **argv)
             }
             _g_MediaPlayer.ui_info.in_height = atoi(argv[i+1]);  //UI SRC SIZE
         }
+        if (0 == strcmp(argv[i], "-p"))
+        {
+            _g_MediaPlayer.video_info.ratio = atoi(argv[i+1]);
+            _g_MediaPlayer.video_info.ratio = _g_MediaPlayer.video_info.ratio > AV_AUTO_MODE ? AV_SCREEN_MODE : _g_MediaPlayer.video_info.ratio;
+            //mm_player_set_opts("video_ratio", "", _g_MediaPlayer.video_info.ratio);
+            printf("video_ratio:%d\n", _g_MediaPlayer.video_info.ratio);
+        }
 
     }
     if(g_u8PipelineMode == 1)
@@ -2809,8 +2995,8 @@ MI_S32 parse_args(int argc, char **argv)
 void sstar_CmdParse_Pause(void)
 {
     char ch;
-    MI_U16 u16GpuMaxW = g_stDrmCfg.width / 3;
-    MI_U16 u16GpuMaxH = g_stDrmCfg.height / 3;
+    MI_U16 u16GpuMaxW = g_stDrmCfg.width;
+    MI_U16 u16GpuMaxH = g_stDrmCfg.height;
     printf("press q to exit\n");
     while ((ch = getchar()) != 'q')
     {
@@ -2819,7 +3005,7 @@ void sstar_CmdParse_Pause(void)
         {
             case 'a':
                 printf("======== GpuLT[+] =======\n");
-                if((g_u32GpuLT_X + 10 >= u16GpuMaxW) || (g_u32GpuLT_Y + 10 >= u16GpuMaxH))
+                if((g_u32GpuLT_X + 10 + g_u32GpuRT_X >= u16GpuMaxW) || (g_u32GpuLT_Y + 10 + g_u32GpuLB_Y >= u16GpuMaxH))
                 {
                     printf("Set Gpu PointOffse Fail, the PointOffse can not More than disp w/3 h/3 !!!\n");
                 }
@@ -2852,7 +3038,7 @@ void sstar_CmdParse_Pause(void)
             case 'c':
                 {
                     printf("======== GpuLB[+] =======\n");
-                    if((g_u32GpuLB_X + 10 >= u16GpuMaxW) || (g_u32GpuLB_Y + 10 >= u16GpuMaxH))
+                    if((g_u32GpuLB_X + 10 + g_u32GpuRB_X >= u16GpuMaxW) || (g_u32GpuLB_Y + 10 + g_u32GpuLT_Y >= u16GpuMaxH))
                     {
                         printf("Set Gpu PointOffse Fail, the PointOffse can not More than disp w/3 h/3 !!!\n");
                     }
@@ -2886,7 +3072,7 @@ void sstar_CmdParse_Pause(void)
             case 'e':
                 {
                     printf("======== GpuRT[+] =======\n");
-                    if((g_u32GpuRT_X + 10 >= u16GpuMaxW) || (g_u32GpuRT_Y + 10 >= u16GpuMaxH))
+                    if((g_u32GpuRT_X + 10 + g_u32GpuLT_X >= u16GpuMaxW) || (g_u32GpuRT_Y + 10 + g_u32GpuRB_X >= u16GpuMaxH))
                     {
                         printf("Set Gpu PointOffse Fail, the PointOffse can not More than disp w/3 h/3 !!!\n");
                     }
@@ -2921,7 +3107,7 @@ void sstar_CmdParse_Pause(void)
             case 'g':
                 {
                     printf("======== GpuRB[+] =======\n");
-                    if((g_u32GpuRB_X + 10 >= u16GpuMaxW) || (g_u32GpuRB_Y + 10 >= u16GpuMaxH))
+                    if((g_u32GpuRB_X + 10 + g_u32GpuLB_X >= u16GpuMaxW) || (g_u32GpuRB_Y + 10 + g_u32GpuRT_X >= u16GpuMaxH))
                     {
                         printf("Set Gpu PointOffse Fail, the PointOffse can not More than disp w/3 h/3 !!!\n");
                     }
@@ -2967,6 +3153,43 @@ void sstar_CmdParse_Pause(void)
                     g_picQuality.u32Saturation ++;
                     g_picQuality.u32Sharpness ++;
                     sstar_set_pictureQuality(g_picQuality);
+                }
+                break;
+
+            case 't'://exit video
+                {
+                    if(g_player_thread)
+                    {
+                        g_bThreadExitPlayer = false;
+                        pthread_join(g_player_thread, NULL);
+                        g_player_thread = NULL;
+                    }
+                    if(g_pThreadGfx)
+                    {
+                        g_bThreadExitGfx = false;
+                        pthread_join(g_pThreadGfx, NULL);
+                        g_pThreadGfx = NULL;
+                    }
+
+                }
+                break;
+            case 'y'://exit osd
+                {
+                    if(g_pThreadUiDrm)
+                    {
+                        g_bThreadExitUiDrm = false;
+                        pthread_join(g_pThreadUiDrm, NULL);
+                        g_pThreadUiDrm = NULL;
+                    }
+
+                }
+                break;
+
+            case 'u'://set ratio
+                {
+                    _g_MediaPlayer.video_info.ratio++;
+                    _g_MediaPlayer.video_info.ratio = _g_MediaPlayer.video_info.ratio > AV_AUTO_MODE ? AV_ORIGIN_MODE : _g_MediaPlayer.video_info.ratio;
+                    sstar_set_ratio(_g_MediaPlayer.video_info.ratio);
                 }
                 break;
 
@@ -3017,7 +3240,7 @@ MI_S32 main(int argc, char **argv)
 
     STCHECKRESULT(sstar_BaseModule_Init());
     mm_player_set_mute(false);
-    mm_player_set_volume(50);
+    mm_player_set_volume(30);
 
     sstar_CmdParse_Pause();
 

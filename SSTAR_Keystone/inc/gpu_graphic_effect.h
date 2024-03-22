@@ -73,14 +73,16 @@ enum CpuAccess {
 class GpuGraphicBuffer {
   public:
     GpuGraphicBuffer() = delete;
-    GpuGraphicBuffer(uint32_t inWidth, uint32_t inHeight, uint32_t inFormat, uint32_t inStride);
+    GpuGraphicBuffer(uint32_t inWidth, uint32_t inHeight, uint32_t inFormat,
+                     uint32_t inStride, bool enableAfbc = false);
     GpuGraphicBuffer(int32_t inFd, uint32_t inWidth, uint32_t inHeight, uint32_t inFormat,
-                     uint32_t *inStride, uint32_t *inPlaneOffset);
+                     uint32_t* inStride, uint32_t* inPlaneOffset);
     ~GpuGraphicBuffer();
     bool initCheck() const              { return mInitCheck; }
     uint32_t getWidth() const           { return mWidth; }
     uint32_t getHeight() const          { return mHeight; }
     uint32_t getFormat() const          { return mFormat; }
+    uint64_t getModifier() const        { return mModifier; }
     uint32_t getFd() const              { return mFd; }
     uint32_t getBufferSize() const      { return mSize; }
     uint32_t *getStride()               { return mStride; }
@@ -91,14 +93,16 @@ class GpuGraphicBuffer {
 
   private:
     bool initWithSize(uint32_t inWidth, uint32_t inHeight, uint32_t inFormat, uint32_t inStride);
+    bool initAfbcWithSize(uint32_t inWidth, uint32_t inHeight, uint32_t inFormat, uint32_t inStride);
     bool initWithFd(int32_t inFd, uint32_t inWidth, uint32_t inHeight, uint32_t inFormat,
-                    uint32_t *inStride, uint32_t *inPlaneOffset);
+                    uint32_t* inStride, uint32_t* inPlaneOffset);
 
     bool mInitCheck;
     uint32_t mWidth;
     uint32_t mHeight;
     uint32_t mSize;
     uint32_t mFormat;
+    uint64_t mModifier;
     uint32_t mStride[3];
     uint32_t mPlaneOffset[3];
     int32_t mFd;
@@ -212,10 +216,10 @@ class GpuGraphicEffect {
     void generateVertex(Rect displayFrame);
     uint64_t getUniqueId(int32_t fd);
     EGLImageKHR createEGLImageIfNeeded(std::shared_ptr<GpuGraphicBuffer> buffer, bool isFbo);
-    bool generateKeystoneCorrectionVertexAndTexCoord(glm::vec2 position[4],
-                                                     int32_t widthSegments, int32_t heightSegments,
-                                                     float*& pVertex, int32_t vertexStride,
-                                                     float*& pTexCood, int32_t texStride);
+    bool generateKeystoneCorrectionVertex(glm::vec2 positionOrignal[4],
+                                          int32_t widthSegments, int32_t heightSegments,
+                                          float*& position, int32_t positionStride,
+                                          float*& texCoord, int32_t texStride);
     bool updateDisplayDeformationMatrix();
 
     std::mutex mInitMutex;
