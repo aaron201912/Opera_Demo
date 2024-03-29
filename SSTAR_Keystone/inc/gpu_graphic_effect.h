@@ -135,7 +135,7 @@ class GpuGraphicEffect {
      * height: Output framebuffer height
      * format：Output framebuffer fourcc format
      */
-    int32_t init(int32_t width, int32_t height, uint32_t format);
+    int32_t init(int32_t width, int32_t height, uint32_t format, bool enableAfbc = false);
 
     /*
      * Deinit gpu graphic efffect, must call after not need to use
@@ -266,6 +266,8 @@ class GpuGraphicEffect {
     Transform mTransform = NONE;
 
     EffectType mEffectType = EFFECT_NONE;
+
+    bool mEnableAfbc = false;
 
     typedef struct {
         uint32_t fboTexName;
