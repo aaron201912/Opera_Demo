@@ -80,12 +80,25 @@ enum {
  * < only used for hard decoding >
  */
 enum {
-    AV_DEC_EVENT_NONE      = 0x00000000, // no event
-    AV_DEC_EVENT_SEQCHANGE = 0x00000001, // sequence changed
-    AV_DEC_EVENT_EOS       = 0x00000002, // end of stream
-    AV_DEC_EVENT_DECERR    = 0x00000004, // decoding error
-    AV_DEC_EVENT_DROPPED   = 0x00000008, // frame dropped
-    AV_DEC_EVENT_DECDONE   = 0x00000010, // decode done, do nothing
+    PLAYBACK_EVENT_NONE                = 0,  // no event
+    PLAYBACK_EVENT_SEQCHANGE,                // sequence changed
+    PLAYBACK_EVENT_DECERR,                   // decoding error
+    PLAYBACK_EVENT_DROPPED,                  // frame dropped
+    PLAYBACK_EVENT_DECDONE,                  // decode done, do nothing
+    PLAYBACK_EVENT_OPENED,                   // player opened successfully
+    PLAYBACK_EVENT_STARTED,                  // player started
+    PLAYBACK_EVENT_STOPED,                   // player stoped
+    PLAYBACK_EVENT_PAUSED,                   // player paused
+    PLAYBACK_EVENT_RESUMED,                  // player resumed
+    PLAYBACK_EVENT_STREAMEND,                // video and audio are end of stream
+    PLAYBACK_EVENT_SEEKED,                   // player seeked successfully
+    PLAYBACK_EVENT_BUFFERING,                // player is buffering data from network
+    PLAYBACK_EVENT_BUFFERED,                 // player has buffered data
+    PLAYBACK_EVENT_BUFFERING_TIMEOUT,        // player buffers data from network out of time
+    PLAYBACK_EVENT_AUDIO_UNSUPPORTED,        // input audio format unsupported, such as: ac3, eac3, and etc
+    PLAYBACK_EVENT_VIDEO_UNSUPPORTED,        // input video format unsupported, such as: field, 10bits, and etc
+    PLAYBACK_EVENT_INVALID_FILE,             // input invalid url
+    PLAYBACK_EVENT_NETWORK_UNREACHABLE,      // player cannot access the network
 };
 
 /**
@@ -349,6 +362,12 @@ int mm_player_get_audio_frame(frame_info_t *frame_info);
  * User put back a audio frame to player, and must be paired with the mm_player_get_audio_frame function.
  */
 int mm_player_put_audio_frame(frame_info_t *frame_info);
+
+/**
+ * Call the api after mm_player_get_audio_frame, send pcm data to device.
+ * User can perform algorithm processing on audio data and sends the processed data to deivce through this api
+ */
+int mm_player_write_audio_frame(uint8_t *buffer, int size);
 
 /* register event callback function
  * h26x hard decoding event type:

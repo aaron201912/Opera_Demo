@@ -15,6 +15,9 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 
 #pragma once
 
+#include "gpu_graphic_common.h"
+#include "gpu_graphic_buffer.h"
+
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
@@ -23,90 +26,8 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 #include <glm/glm.hpp>
 
 #include <deque>
-#include <thread>
+#include <memory>
 #include <mutex>
-
-typedef struct {
-    /// Minimum X coordinate of the rectangle.
-    uint32_t left;
-    /// Minimum Y coordinate of the rectangle.
-    uint32_t top;
-    /// Maximum X coordinate of the rectangle.
-    uint32_t right;
-    /// Maximum Y coordinate of the rectangle.
-    uint32_t bottom;
-} Rect;
-
-enum Transform {
-    NONE = 0,
-    /* Flip source image horizontally */
-    FLIP_H,
-    /* Flip source image vertically */
-    FLIP_V,
-    /* Rotate source image 90 degrees clock-wise */
-    ROT_90,
-    /* Rotate source image 180 degrees */
-    ROT_180,
-    /* RRotate source image 270 degrees clock-wise */
-    ROT_270,
-    /* Flip source image horizontally, the rotate 90 degrees clock-wise */
-    FLIP_H_ROT_90,
-    /* Flip source image vertically, the rotate 90 degrees clock-wise */
-    FLIP_V_ROT_90,
-};
-
-typedef struct {
-    uint32_t width;
-    uint32_t height;
-    uint32_t format;
-    int32_t fds[3];
-    uint32_t stride[3];
-    uint32_t dataOffset[3];
-} GraphicBuffer;
-
-enum CpuAccess {
-    READ,
-    WRITE,
-    READWRITE,
-};
-
-class GpuGraphicBuffer {
-  public:
-    GpuGraphicBuffer() = delete;
-    GpuGraphicBuffer(uint32_t inWidth, uint32_t inHeight, uint32_t inFormat,
-                     uint32_t inStride, bool enableAfbc = false);
-    GpuGraphicBuffer(int32_t inFd, uint32_t inWidth, uint32_t inHeight, uint32_t inFormat,
-                     uint32_t* inStride, uint32_t* inPlaneOffset);
-    ~GpuGraphicBuffer();
-    bool initCheck() const              { return mInitCheck; }
-    uint32_t getWidth() const           { return mWidth; }
-    uint32_t getHeight() const          { return mHeight; }
-    uint32_t getFormat() const          { return mFormat; }
-    uint64_t getModifier() const        { return mModifier; }
-    uint32_t getFd() const              { return mFd; }
-    uint32_t getBufferSize() const      { return mSize; }
-    uint32_t *getStride()               { return mStride; }
-    uint32_t *getPlaneOffset()          { return mPlaneOffset; }
-    void *map(CpuAccess access);
-    void flushCache(CpuAccess access);
-    void unmap(void *virAddr, CpuAccess access);
-
-  private:
-    bool initWithSize(uint32_t inWidth, uint32_t inHeight, uint32_t inFormat, uint32_t inStride);
-    bool initAfbcWithSize(uint32_t inWidth, uint32_t inHeight, uint32_t inFormat, uint32_t inStride);
-    bool initWithFd(int32_t inFd, uint32_t inWidth, uint32_t inHeight, uint32_t inFormat,
-                    uint32_t* inStride, uint32_t* inPlaneOffset);
-
-    bool mInitCheck;
-    uint32_t mWidth;
-    uint32_t mHeight;
-    uint32_t mSize;
-    uint32_t mFormat;
-    uint64_t mModifier;
-    uint32_t mStride[3];
-    uint32_t mPlaneOffset[3];
-    int32_t mFd;
-};
 
 class GpuGraphicEffect {
   public:
@@ -204,7 +125,7 @@ class GpuGraphicEffect {
     EGLBoolean eglInit();
     GLboolean glesInit();
     GLboolean glesInitShaders();
-    void glesInitTexturing();
+    void glesInitTextures();
     GLboolean glesInitRenderTargets();
     void eglCleanup();
     void glesCleanup();

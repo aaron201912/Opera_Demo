@@ -55,6 +55,8 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 #include "mi_hvp_datatype.h"
 #include "mi_scl.h"
 #include <gpu_graphic_effect.h>
+#include <gpu_graphic_render.h>
+
 #include "sstar_drm.h"
 
 
@@ -101,6 +103,7 @@ typedef struct ui_info_s {
 
 
 typedef struct player_obj_s {
+    MI_BOOL pIsCreated;
     bool exit;
     bool player_working;
     int  loop_mode;
@@ -113,6 +116,8 @@ typedef struct player_obj_s {
 } media_player_t;
 
 typedef struct hdmirx_obj_s {
+    MI_BOOL pIsCreated;
+    MI_BOOL pIsCleaned;
     MI_HDMIRX_PortId_e u8HdmirxPort;
     MI_SYS_ChnPort_t stHvpChnPort;
     MI_SYS_ChnPort_t stSclChnPort;
@@ -128,6 +133,18 @@ typedef struct hdmirx_obj_s {
 
 } hdmirx_player_t;
 
+
+typedef struct convans_obj_s {
+    MI_BOOL pIsCreated;
+    std::shared_ptr<GpuGraphicBuffer> mainFbCanvas;
+    pthread_mutex_t mutex;
+
+} convans_contex_t;
+
+convans_contex_t _g_MainCanvas;
+
+std::shared_ptr<GpuGraphicBuffer> g_MainFbCanvas;
+pthread_mutex_t g_MainFbCanvas_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 static media_player_t _g_MediaPlayer;
@@ -422,6 +439,8 @@ std::pair<uint32_t, uint32_t> prev_mop_gem_handle(static_cast<uint32_t>(0), stat
 
 
 std::shared_ptr<GpuGraphicEffect> g_stdOsdGpuGfx;
+std::shared_ptr<GpuGraphicRender> g_stdOsdGpuRender;
+
 std::shared_ptr<GpuGraphicEffect> g_stdVideoGpuGfx;
 std::shared_ptr<GpuGraphicEffect> g_stdHdmiRxGpuGfx;
 
@@ -463,8 +482,6 @@ St_ListNode_t *_g_OsdListEntryNode[BUF_DEPTH];
 std::shared_ptr<GpuGraphicBuffer> g_VideoOutputBuffer[BUF_DEPTH];
 St_ListNode_t *_g_VideoListEntryNode[BUF_DEPTH];
 
-
-pthread_mutex_t ListMutexGfx = PTHREAD_MUTEX_INITIALIZER;
 
 //MI_U8 u8EnqueueDmabufCnt = 0;
 
@@ -553,17 +570,11 @@ static St_ListNode_t* get_first_node(St_List_t *st_list)
 
     St_ListNode_t *entry_node = NULL;
     pthread_mutex_lock(&st_list->listMutex);
-    #if 0
-    if(!(list_empty(&st_list->queue_list)))
-    {
-        entry_node = list_first_entry(&st_list->queue_list, St_ListNode_t, list);
-        list_del(&entry_node->list);
-    }
-    #endif
+
     if(!(list_empty(&st_list->queue_list)))
     {
         list_for_each_entry_safe(entry_node, entry_tmp, &st_list->queue_list, list) {
-            list_del(&entry_node->list); // 删除节点
+            list_del(&entry_node->list); // Delete node
             break;
         }
     }
@@ -1271,16 +1282,17 @@ static void mm_video_event_handle(event_info_t *event_info)
         return;
     }
 
-    //printf("video event(%d).\n", event_info->event);
-
-    switch (event_info->event) {
-        case AV_DEC_EVENT_DECERR:
+    switch (event_info->event)
+    {
+        case PLAYBACK_EVENT_DECERR:
             printf("get dec err event...\n");
             break;
-        case AV_DEC_EVENT_EOS:
+
+        case PLAYBACK_EVENT_STREAMEND:
             printf("get eos event ...\n");
             break;
-        case AV_DEC_EVENT_SEQCHANGE:
+
+        case PLAYBACK_EVENT_SEQCHANGE:
             //printf("get seq change event...\n");
             printf("get seq info wh(%d %d), crop(%d %d %d %d)\n",
                    event_info->seq_info.pic_width, event_info->seq_info.pic_height,
@@ -1289,14 +1301,17 @@ static void mm_video_event_handle(event_info_t *event_info)
             memcpy(&_g_MediaPlayer.video_info.seq_info, &event_info->seq_info, sizeof(seq_info_t));
             mm_set_video_size(&event_info->seq_info);
             break;
-        case AV_DEC_EVENT_DROPPED:
+
+        case PLAYBACK_EVENT_DROPPED:
             //printf("get frame drop event...\n");
             break;
-        case AV_DEC_EVENT_DECDONE:
+
+        case PLAYBACK_EVENT_DECDONE:
             //printf("get decframe done event...\n");
             break;
+
         default:
-            printf("event type(%x) err\n", event_info->event);
+            printf("event type(%d) err \n", event_info->event);
             break;
     }
 }
@@ -1751,6 +1766,21 @@ static std::shared_ptr<GpuGraphicEffect> sstar_gpugfx_context_init(uint32_t u32W
         printf("Failed to set keystone correction points\n");
         return NULL;
     }
+
+    if(_g_MediaPlayer.rotate == 1)
+    {
+        stGpuGfx->updateTransformStatus(Transform :: ROT_90);
+    }
+    else if(_g_MediaPlayer.rotate == 2)
+    {
+        stGpuGfx->updateTransformStatus(Transform :: ROT_180);
+    }
+    else if(_g_MediaPlayer.rotate == 3)
+    {
+        stGpuGfx->updateTransformStatus(Transform :: ROT_270);
+    }
+
+
     return stGpuGfx;
 }
 
@@ -1821,6 +1851,33 @@ static void sstar_media_context_init()
 
 }
 
+static int sstar_canvas_init()
+{
+    uint32_t u32UiFormat = DRM_FORMAT_ABGR8888;
+    if(g_stdOsdGpuRender == NULL)
+    {
+        g_stdOsdGpuRender = std::make_shared<GpuGraphicRender>();
+        g_stdOsdGpuRender->init(u32UiFormat);
+    }
+    _g_MainCanvas.mutex = PTHREAD_MUTEX_INITIALIZER;
+    _g_MainCanvas.mainFbCanvas = std::make_shared<GpuGraphicBuffer>(g_stDrmCfg.width, g_stDrmCfg.height, DRM_FORMAT_ABGR8888, ALIGN_UP(g_stDrmCfg.width * 4, 64));
+    if (!_g_MainCanvas.mainFbCanvas->initCheck()) {
+        printf("Create _g_MainCanvas failed\n");
+        return -1;
+    }
+    return 0;
+}
+static void sstar_canvas_deinit()
+{
+    _g_MainCanvas.pIsCreated = false;
+    _g_MainCanvas.mainFbCanvas = NULL;
+    if(g_stdOsdGpuRender != NULL)
+    {
+        g_stdOsdGpuRender->deinit();
+    }
+}
+
+
 void sstar_clear_plane(int plane)
 {
     St_ListNode_t *entryNode;
@@ -1878,7 +1935,7 @@ void *sstar_DrmCommit_Thread(void * arg)
 
     while(g_bThreadExitCommit)
     {
-        if(bShowUi)
+        if(_g_MainCanvas.pIsCreated)
         {
             ListOsdCommit = get_first_node(&g_HeadListOsdCommit);//get scl out buf
             if(ListOsdCommit)
@@ -1922,7 +1979,7 @@ void *sstar_DrmCommit_Thread(void * arg)
                 }
             }
         }
-        if(g_u8PipelineMode != 0xff)
+        if(_g_HdmiRxPlayer.pIsCreated || _g_MediaPlayer.pIsCreated)
         {
             ListVideoCommit = get_first_node(&g_HeadListVideoCommit);//get scl out buf
             if(ListVideoCommit)
@@ -1995,21 +2052,97 @@ void *sstar_DrmCommit_Thread(void * arg)
     return NULL;
 }
 
+
+static std::shared_ptr<GpuGraphicBuffer> sstar_draw_subcanvas(GrFillInfo srcFillInfo)
+{
+    FILE* file = NULL;
+    char *pSubFbVaddr = NULL;
+    uint32_t u32UiFormat = DRM_FORMAT_ABGR8888;
+    int subFbWidth  = srcFillInfo.rect.right;
+    int subFbHeight = srcFillInfo.rect.bottom;
+
+    std::shared_ptr<GpuGraphicBuffer> subFbCanvas = std::make_shared<GpuGraphicBuffer>(subFbWidth, subFbHeight, u32UiFormat, ALIGN_UP(subFbWidth * 4, 64));
+
+    g_stdOsdGpuRender->fill(subFbCanvas, srcFillInfo);
+
+    pSubFbVaddr = (char *)subFbCanvas->map(READWRITE);
+    if(!pSubFbVaddr) {
+        printf("Failed to mmap subFbCanvas buffer\n");
+        return NULL;
+    }
+
+    file = fopen(g_InputUiPath, "r+");
+    if (file)
+    {
+        for (int i = 0; i < subFbHeight; i++)
+        {
+            fread(pSubFbVaddr + (i * ALIGN_UP(subFbWidth * 4, 64)), sizeof(char), subFbWidth*4, file);
+        }
+        fclose(file);
+    }
+    else
+    {
+        printf("Error: can not open: %s\n", g_InputUiPath);
+    }
+    subFbCanvas->flushCache(READWRITE);
+    subFbCanvas->unmap(pSubFbVaddr, READWRITE);
+
+    return subFbCanvas;
+}
+
+
+static int sstar_draw_canvas()
+{
+    GrFillInfo srcFillInfo;
+    GrFillInfo dstFillInfo;
+    GrBitblitInfo bitblitinfo;
+    std::shared_ptr<GpuGraphicBuffer> subFbCanvas;
+
+    if(_g_MainCanvas.mainFbCanvas == NULL)
+    {
+        printf("Error:mainFbCanvas pointer is NULL\n");
+        return NULL;
+    }
+
+    srcFillInfo.rect.left = 0;
+    srcFillInfo.rect.top = 0;
+    srcFillInfo.rect.right = _g_MediaPlayer.ui_info.in_width;
+    srcFillInfo.rect.bottom = _g_MediaPlayer.ui_info.in_height;
+    srcFillInfo.color = 0x00;
+    subFbCanvas = sstar_draw_subcanvas(srcFillInfo);
+    if (subFbCanvas == NULL) {
+        printf("dram_SubFbCanvas failed\n");
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_MainFbCanvas_mutex);
+    dstFillInfo.rect.left = 0;
+    dstFillInfo.rect.top = 0;
+    dstFillInfo.rect.right = g_stDrmCfg.width;
+    dstFillInfo.rect.bottom = g_stDrmCfg.height;
+    dstFillInfo.color = 0x00000000;
+    g_stdOsdGpuRender->fill(_g_MainCanvas.mainFbCanvas, dstFillInfo);
+
+    memcpy(&bitblitinfo.srcRect, &srcFillInfo.rect, sizeof(Rect));
+    bitblitinfo.dstRect.left = 0;
+    bitblitinfo.dstRect.top = 0;
+    bitblitinfo.dstRect.right = bitblitinfo.srcRect.right;
+    bitblitinfo.dstRect.bottom = bitblitinfo.srcRect.bottom;
+
+    printf("src[%d,%d,%d,%d] dst[%d,%d,%d,%d]\n",bitblitinfo.srcRect.left,bitblitinfo.srcRect.top,bitblitinfo.srcRect.right,bitblitinfo.srcRect.bottom,
+        bitblitinfo.dstRect.left,bitblitinfo.dstRect.top,bitblitinfo.dstRect.right,bitblitinfo.dstRect.bottom);
+
+    g_stdOsdGpuRender->bitblit(subFbCanvas, _g_MainCanvas.mainFbCanvas, bitblitinfo);
+    pthread_mutex_unlock(&g_MainFbCanvas_mutex);
+    return 0;
+
+}
+
 void *sstar_OsdProcess_Thread(void * arg)
 {
     int ret;
-    int BigUiWidth = g_stDrmCfg.width;
-    int BigUiHeight = g_stDrmCfg.height;
-    int align_stride;
-    int SmallUiWidth  = _g_MediaPlayer.ui_info.in_width;
-    int SmallUiHeight = _g_MediaPlayer.ui_info.in_height;
-    uint32_t tmpData;
-
+    uint32_t u32UiFormat = DRM_FORMAT_ABGR8888;
     St_ListNode_t *ListOsdOutput;
-
-    int startX = 100;
-    int startY = 100;
-    FILE* file = nullptr;
 
     ret = sstar_OsdList_Init();
     if (ret < 0)
@@ -2018,155 +2151,31 @@ void *sstar_OsdProcess_Thread(void * arg)
         return NULL;
     }
 
-    uint32_t* BigUiImageData    = (uint32_t*)malloc(BigUiWidth * BigUiHeight * sizeof(uint32_t));
-    uint32_t* SmallUiImageData  = (uint32_t*)malloc(SmallUiWidth * SmallUiHeight * sizeof(uint32_t));
-    memset((void *)BigUiImageData, 0x00, BigUiWidth * BigUiHeight * sizeof(uint32_t) );
-    memset((void *)SmallUiImageData, 0x00, SmallUiWidth * SmallUiHeight * sizeof(uint32_t));
-
     g_RectDisplayRegion[0].left = 0;
     g_RectDisplayRegion[0].top = 0;
     g_RectDisplayRegion[0].right = g_stDrmCfg.width;
     g_RectDisplayRegion[0].bottom = g_stDrmCfg.height;
 
-    file = fopen(g_InputUiPath, "r+");
-    if (file)
-    {
-        for (int i = 0; i < SmallUiWidth * SmallUiHeight; i++)
-        {
-            uint8_t pixelData[4];
-            fread(pixelData, sizeof(uint8_t), 4, file);
-            SmallUiImageData[i] = (pixelData[0] << 24) | (pixelData[1] << 16) | (pixelData[2] << 8) | pixelData[3];
-        }
-        fclose(file);
-    }
-    else
-    {
-        printf("无法打开文件 %s\n", g_InputUiPath);
-    }
+    g_stdOsdGpuGfx = sstar_gpugfx_context_init(g_stDrmCfg.width, g_stDrmCfg.height, u32UiFormat, false);
 
-    #if 0
-    for (int y = 0; y < BigUiHeight; y++)
-    {
-        for (int x = 0; x < BigUiWidth; x++)
-        {
-            if (x < 5 || x >= BigUiWidth - 5 || y < 5 || y >= BigUiHeight - 5)
-            {
-                // 在边缘区域绘制黑色像素
-                int index = y * BigUiWidth + x; // 计算像素索引
-                BigUiImageData[index] = 0xFF000000; // 设置为黑色（Alpha: FF, Red: 00, Green: 00, Blue: 00）
-            } else
-            {
-                // 其余部分设置为透明
-                int index = y * BigUiWidth + x; // 计算像素索引
-                BigUiImageData[index] = 0x00000000; // 设置为透明（Alpha: 00, Red: 00, Green: 00, Blue: 00）
-            }
-        }
-    }
-    #endif
-    for (int y = 0; y < SmallUiHeight; y++)
-    {
-        for (int x = 0; x < SmallUiWidth; x++)
-        {
-            tmpData = SmallUiImageData[y * SmallUiWidth + x];
-
-            int bigX = startX + x;
-            int bigY = startY + y;
-            if (bigX < BigUiWidth && bigY < BigUiHeight)
-            {
-                BigUiImageData[bigY * BigUiWidth + bigX] = tmpData;
-            }
-        }
-    }
-
-    std::shared_ptr<GpuGraphicBuffer> inputBuffer;
-
-    uint32_t u32UiFormat;
-    u32UiFormat = DRM_FORMAT_ABGR8888;
-    char *pVaddr = nullptr;
-    g_stdOsdGpuGfx = sstar_gpugfx_context_init(g_stDrmCfg.width, g_stDrmCfg.height, u32UiFormat, true);
-    align_stride = ALIGN_UP(BigUiWidth * 4, 64);
-    inputBuffer = std::make_shared<GpuGraphicBuffer>(BigUiWidth, BigUiHeight, u32UiFormat, align_stride);
-    if (!inputBuffer->initCheck()) {
-        printf("Create GpuGraphicBuffer failed\n");
-        return NULL;
-    }
-
-    pVaddr = (char *)inputBuffer->map(READWRITE);
-    if(!pVaddr) {
-        printf("Failed to mmap dma buffer\n");
-        return NULL;
-    }
-
-    memset(pVaddr, 0x00, inputBuffer->getBufferSize());
-
-    for(int i=0 ;i < BigUiHeight;i++)
-    {
-        memcpy(pVaddr + (i * align_stride), (char *)BigUiImageData + (i * BigUiWidth * 4), BigUiWidth * 4);
-    }
-    inputBuffer->flushCache(READWRITE);
-#if 0
-        FILE *file_fd;
-        file_fd = open_dump_file("/customer/test_rgb_in.bin");
-        wirte_dump_file(file_fd, (char *)pVaddr, inputBuffer->getBufferSize());
-        close_dump_file(file_fd);
-#endif
-
-
-
-    //drmVBlank vbl;
-    if(_g_MediaPlayer.rotate == 1)
-    {
-        g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_90);
-    }
-    else if(_g_MediaPlayer.rotate == 2)
-    {
-        g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_180);
-    }
-    else if(_g_MediaPlayer.rotate == 3)
-    {
-        g_stdOsdGpuGfx->updateTransformStatus(Transform :: ROT_270);
-    }
-
-    //unsigned long eTime1;
-    //unsigned long eTime2;
-    //unsigned long eTime3;
-    //struct timeval timeEnqueue1;
-
+    _g_MainCanvas.pIsCreated = true;
     while(g_bThreadExitUiDrm == TRUE)
     {
         ListOsdOutput = get_first_node(&g_HeadListOsdOutput);//get scl out buf
 
         if(ListOsdOutput)
         {
-        #if 0
-            vbl.request.type = DRM_VBLANK_RELATIVE;
-            vbl.request.sequence = 1; // 等待下一个 VBlank
-            vbl.request.signal = NULL;
-
-            ret = drmWaitVBlank(g_stDrmCfg.fd, &vbl);
-            if (ret) {
-                printf("Error waiting for VBlank: %d\n", ret);
-                continue;
-            }
-        #endif
-            //gettimeofday(&timeEnqueue1, NULL);
-            //eTime1 =timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
-            ret = g_stdOsdGpuGfx->process(inputBuffer, g_RectDisplayRegion[0], ListOsdOutput->pGraphicBuffer);
+            pthread_mutex_lock(&_g_MainCanvas.mutex);
+            ret = g_stdOsdGpuGfx->process(_g_MainCanvas.mainFbCanvas, g_RectDisplayRegion[0], ListOsdOutput->pGraphicBuffer);
             if (ret)
             {
                 printf("Osd:Gpu graphic effect process failed\n");
+                pthread_mutex_unlock(&_g_MainCanvas.mutex);
                 return NULL;
             }
-            //gettimeofday(&timeEnqueue1, NULL);
-            //eTime2 =timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
-            //if((eTime2 - eTime1) >= 16)
-            //{
-            //    printf("process0 time=%d \n", (eTime2 - eTime1));
-            //}
-
+            pthread_mutex_unlock(&_g_MainCanvas.mutex);
             add_tail_node(&g_HeadListOsdCommit, &ListOsdOutput->list);
             usleep(33 * 1000);
-
         }
         else
         {
@@ -2174,15 +2183,16 @@ void *sstar_OsdProcess_Thread(void * arg)
             usleep(5 * 1000);
         }
 
-
     }
-    inputBuffer->unmap(pVaddr, READWRITE);
-    inputBuffer = nullptr;
+
     sstar_clear_plane(GOP_UI_ID);
-    g_stdOsdGpuGfx->deinit();
 
+    if(g_stdOsdGpuGfx != NULL)
+    {
+        g_stdOsdGpuGfx->deinit();
+    }
+    sstar_canvas_deinit();
     sstar_OsdList_DeInit();
-
     return NULL;
 }
 
@@ -2239,6 +2249,7 @@ void* sstar_HdmiPlugsDetect_Thread(void * arg)
                         printf("Get Hdmirx Timing error!\n");
                         break;
                     }
+                    _g_HdmiRxPlayer.pIsCleaned = false;
                 }
                 while(_g_HdmiRxPlayer.eSignalStatus != E_MI_HDMIRX_SIG_SUPPORT && hvp_event_thread_running)
                 {
@@ -2258,6 +2269,7 @@ void* sstar_HdmiPlugsDetect_Thread(void * arg)
                             printf("Get Hdmirx Timing error!\n");
                             break;
                         }
+                        _g_HdmiRxPlayer.pIsCleaned = false;
                     }
                     else
                     {
@@ -2268,9 +2280,11 @@ void* sstar_HdmiPlugsDetect_Thread(void * arg)
                             printf("MI_HDMIRX_GetHDMILineDetStatus fail,ret=%d \n",ret);
                         }
 
-                        if(!_g_HdmiRxPlayer.pbConnected)
+                        if(!_g_HdmiRxPlayer.pbConnected && !_g_HdmiRxPlayer.pIsCleaned)
                         {
                             //printf("HdmiRx plugs out.\n");
+                            sstar_clear_plane(MOPG_ID0);
+                            _g_HdmiRxPlayer.pIsCleaned = true;
                             memset(&_g_HdmiRxPlayer.pstTimingInfo, 0x00, sizeof(MI_HDMIRX_TimingInfo_t));
                             memset(&_g_HdmiRxPlayer.pHvpstTimingInfo, 0x00, sizeof(MI_HVP_SignalTiming_t));
                             continue;
@@ -2294,10 +2308,12 @@ void* sstar_HdmiPlugsDetect_Thread(void * arg)
             else
             {
                 printf("HdmiRx plugs out.\n");
+                sstar_clear_plane(MOPG_ID0);
                 memset(&_g_HdmiRxPlayer.pstTimingInfo, 0x00, sizeof(MI_HDMIRX_TimingInfo_t));
                 memset(&_g_HdmiRxPlayer.pHvpstTimingInfo, 0x00, sizeof(MI_HVP_SignalTiming_t));
                 _g_HdmiRxPlayer.eSignalStatus = E_MI_HDMIRX_SIG_NO_SIGNAL;
                 _g_HdmiRxPlayer.eHvpSignalStatus = E_MI_HVP_SIGNAL_UNSTABLE;
+                _g_HdmiRxPlayer.pIsCleaned = true;
             }
         }
     }
@@ -2478,7 +2494,8 @@ void *sstar_HdmiRxProcess_Thread(void * param)
     St_ListNode_t *ListVideoOutput;
     MI_SYS_ChnPort_t *pstSclChnPort = (MI_SYS_ChnPort_t *)param;
     MI_SYS_ChnPort_t stSclChnPort0;
-    MI_SYS_DmaBufInfo_t stDmaOutputBufInfo2;
+    St_ListNode_t *GfxReadListNode;
+    MI_SYS_DmaBufInfo_t stDmaOutputBufInfo;
     memset(&stSclChnPort0, 0x0, sizeof(MI_SYS_ChnPort_t));
 
     stSclChnPort0.eModId = pstSclChnPort->eModId;
@@ -2496,6 +2513,7 @@ void *sstar_HdmiRxProcess_Thread(void * param)
     g_RectDisplayRegion[1].top = 0;
     g_RectDisplayRegion[1].right = ALIGN_UP(g_stDrmCfg.width,16);
     g_RectDisplayRegion[1].bottom = g_stDrmCfg.height;
+
     g_stdHdmiRxGpuGfx = sstar_gpugfx_context_init(u32Width, u32Height, u32GpuInputFormat, false);
 
     struct timeval tv;
@@ -2507,27 +2525,6 @@ void *sstar_HdmiRxProcess_Thread(void * param)
         printf("GET scl Fd Failed , scl Chn = %d\n", stSclChnPort0.u32ChnId);
         return NULL;
     }
-    printf("Get scl Fd = %d, scl Chn = %d\n", s32FdSclPort0, stSclChnPort0.u32ChnId);
-
-    if(_g_MediaPlayer.rotate == 1)
-    {
-        g_stdHdmiRxGpuGfx->updateTransformStatus(Transform :: ROT_90);
-    }
-    else if(_g_MediaPlayer.rotate == 2)
-    {
-        g_stdHdmiRxGpuGfx->updateTransformStatus(Transform :: ROT_180);
-    }
-    else if(_g_MediaPlayer.rotate == 3)
-    {
-        g_stdHdmiRxGpuGfx->updateTransformStatus(Transform :: ROT_270);
-    }
-    else
-    {
-        g_stdHdmiRxGpuGfx->updateTransformStatus(Transform :: NONE);
-    }
-
-
-    St_ListNode_t *GfxReadListNode;
     while(g_bThreadExitHdmi == TRUE)
     {
         FD_ZERO(&ReadFdsSclPort0);
@@ -2543,31 +2540,11 @@ void *sstar_HdmiRxProcess_Thread(void * param)
         }
         else if (0 == s32Ret)
         {
-            //printf("scl select timeout\n");
+            printf("scl select timeout\n");
             continue;
         }
         else
         {
-            s32Ret = MI_SYS_ChnOutputPortDequeueDmabuf(&stSclChnPort0, &stDmaOutputBufInfo2);
-            if(stDmaOutputBufInfo2.u32Status == MI_SYS_DMABUF_STATUS_INVALID)
-            {
-                printf("SclOutputPort DequeueDmabuf statu is INVALID\n");
-                s32Ret = MI_SYS_ChnOutputPortDropDmabuf(&stSclChnPort0, &stDmaOutputBufInfo2);
-                if(MI_SUCCESS != s32Ret)
-                {
-                    printf("failed, drop dma-buf return fail\n");
-                }
-                continue;
-            }
-            if(stDmaOutputBufInfo2.u32Status == MI_SYS_DMABUF_STATUS_DROP)
-            {
-                printf("SclOutputPort DequeueDmabuf statu is DROP\n");
-                continue;
-            }
-            else
-            {
-                //printf("SclOutputPort DequeueDmabuf statu is Done\n");
-            }
 
             GfxReadListNode = get_first_node(&g_HeadListGpuGfxInput);//get scl out buf
             if(GfxReadListNode)
@@ -2575,12 +2552,32 @@ void *sstar_HdmiRxProcess_Thread(void * param)
                 GfxInputBuffer = GfxReadListNode->pGraphicBuffer;
                 if(GfxInputBuffer == NULL)
                 {
+                    //error list,do not(add_tail_node) put it back
                     continue;
                 }
             }
             else
             {
                 //printf("Warn: Get output buf from list failed\n");
+                continue;
+            }
+
+            s32Ret = MI_SYS_ChnOutputPortDequeueDmabuf(&stSclChnPort0, &stDmaOutputBufInfo);
+            if(stDmaOutputBufInfo.u32Status == MI_SYS_DMABUF_STATUS_INVALID)
+            {
+                printf("SclOutputPort DequeueDmabuf statu is INVALID\n");
+                s32Ret = MI_SYS_ChnOutputPortDropDmabuf(&stSclChnPort0, &stDmaOutputBufInfo);
+                if(MI_SUCCESS != s32Ret)
+                {
+                    printf("failed, drop dma-buf return fail\n");
+                }
+                add_tail_node(&g_HeadListSclOutput, &GfxReadListNode->list);
+                continue;
+            }
+            if(stDmaOutputBufInfo.u32Status == MI_SYS_DMABUF_STATUS_DROP)
+            {
+                printf("SclOutputPort DequeueDmabuf statu is DROP\n");
+                add_tail_node(&g_HeadListSclOutput, &GfxReadListNode->list);
                 continue;
             }
 
@@ -2604,6 +2601,7 @@ void *sstar_HdmiRxProcess_Thread(void * param)
                 {
                     sstar_clear_plane(MOPG_ID0);
                 }
+                add_tail_node(&g_HeadListSclOutput, &GfxReadListNode->list);
                 usleep(10 * 1000);
             }
 
@@ -2636,23 +2634,6 @@ void *sstar_VideoProcess_Thread(void * arg)
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
 
     g_stdVideoGpuGfx = sstar_gpugfx_context_init(u32Width, u32Height, u32GpuInputFormat, false);
-
-    if(_g_MediaPlayer.rotate == 1)
-    {
-        g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_90);
-    }
-    else if(_g_MediaPlayer.rotate == 2)
-    {
-        g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_180);
-    }
-    else if(_g_MediaPlayer.rotate == 3)
-    {
-        g_stdVideoGpuGfx->updateTransformStatus(Transform :: ROT_270);
-    }
-    else
-    {
-        g_stdVideoGpuGfx->updateTransformStatus(Transform :: NONE);
-    }
 
     while(g_bThreadExitGfx == TRUE)
     {
@@ -2792,6 +2773,7 @@ static MI_S32 sstar_hdmirx_init()
     else
     {
         printf("MI HdmiRx Connect fail\n");
+        sstar_clear_plane(MOPG_ID0);
     }
 
 
@@ -2973,6 +2955,7 @@ static MI_S32 sstar_HdmiPipeLine_Creat()
         return ret;
     }
 
+    _g_HdmiRxPlayer.pIsCreated = true;
     STCHECKRESULT(MI_SYS_BindChnPort2(0, &_g_HdmiRxPlayer.stHvpChnPort, &_g_HdmiRxPlayer.stSclChnPort, _g_HdmiRxPlayer.hvpFrameRate, _g_HdmiRxPlayer.sclFrameRate, _g_HdmiRxPlayer.eBindType, 0));
     pthread_create(&g_pThreadScl,  NULL, sstar_SclEnqueue_thread, &_g_HdmiRxPlayer.stSclChnPort);
     pthread_create(&g_pThreadHdmi, NULL, sstar_HdmiRxProcess_Thread, &_g_HdmiRxPlayer.stSclChnPort);
@@ -2996,6 +2979,8 @@ static MI_S32 sstar_HdmiPipeLine_Destory()
         pthread_join(g_pThreadScl, NULL);
         g_bThreadExitScl = NULL;
     }
+
+    _g_HdmiRxPlayer.pIsCreated = false;
 
     /************************************************
     step :unbind HVP -> SCL
@@ -3045,6 +3030,7 @@ static MI_S32 sstar_MediaPipeLine_Creat()
     }
     _g_MediaPlayer.player_working = true;
 
+    _g_MediaPlayer.pIsCreated = true;
     pthread_create(&g_player_thread, NULL, sstar_PlayerMoniter_Thread, NULL);
     pthread_create(&g_pThreadGfx, NULL, sstar_VideoProcess_Thread, NULL);
 
@@ -3067,7 +3053,7 @@ static MI_S32 sstar_MediaPipeLine_Destroy()
         pthread_join(g_player_thread, NULL);
         g_player_thread = NULL;
     }
-
+    _g_MediaPlayer.pIsCreated = false;
     mm_player_close();
     sstar_MediaList_DeInit();
 
@@ -3081,6 +3067,8 @@ static MI_S32 sstar_BaseModule_Init()
 
     if(bShowUi)
     {
+        sstar_canvas_init();
+        sstar_draw_canvas();
         pthread_create(&g_pThreadUiDrm, NULL, sstar_OsdProcess_Thread, NULL);
     }
 
@@ -3118,14 +3106,11 @@ static MI_S32 sstar_BaseModule_DeInit()
         g_pThreadCommit = NULL;
     }
 
-    if(bShowUi)
+    if(g_pThreadUiDrm)
     {
-        if(g_pThreadUiDrm)
-        {
-            g_bThreadExitUiDrm = false;
-            pthread_join(g_pThreadUiDrm, NULL);
-            g_pThreadUiDrm = NULL;
-        }
+        g_bThreadExitUiDrm = false;
+        pthread_join(g_pThreadUiDrm, NULL);
+        g_pThreadUiDrm = NULL;
     }
 
     if (g_u8PipelineMode == 0)
@@ -3217,6 +3202,7 @@ MI_S32 parse_args(int argc, char **argv)
             _g_MediaPlayer.ui_info.in_width = atoi(argv[i+1]);  //UI SRC SIZE
 
         }
+
         if (0 == strcmp(argv[i], "-h"))
         {
             if(bShowUi == 0)
@@ -3226,6 +3212,7 @@ MI_S32 parse_args(int argc, char **argv)
             }
             _g_MediaPlayer.ui_info.in_height = atoi(argv[i+1]);  //UI SRC SIZE
         }
+
         if (0 == strcmp(argv[i], "-p"))
         {
             _g_MediaPlayer.video_info.ratio = atoi(argv[i+1]);
@@ -3233,8 +3220,8 @@ MI_S32 parse_args(int argc, char **argv)
             //mm_player_set_opts("video_ratio", "", _g_MediaPlayer.video_info.ratio);
             printf("video_ratio:%d\n", _g_MediaPlayer.video_info.ratio);
         }
-
     }
+
     if(g_u8PipelineMode == 1)
     {
         if(bInputVedioFile != true)
@@ -3262,7 +3249,6 @@ void sstar_CmdParse_Pause(void)
     printf("press q to exit\n");
     while ((ch = getchar()) != 'q')
     {
-
         switch(ch)
         {
             case 'a':
