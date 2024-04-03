@@ -861,7 +861,7 @@ int init_drm_property_ids(uint32_t plane_id, drm_property_ids_t* prop_ids)//int 
 
     if(ret != 0)
     {
-        printf("111drmModeAtomicCommit failed ret=%d \n",ret);
+        printf("drmModeAtomicCommit failed ret=%d \n",ret);
         return -1;
     }
     drmModeAtomicFree(req);
@@ -2171,7 +2171,8 @@ void *sstar_OsdProcess_Thread(void * arg)
             {
                 printf("Osd:Gpu graphic effect process failed\n");
                 pthread_mutex_unlock(&_g_MainCanvas.mutex);
-                return NULL;
+                add_tail_node(&g_HeadListOsdOutput, &ListOsdOutput->list);
+                continue;
             }
             pthread_mutex_unlock(&_g_MainCanvas.mutex);
             add_tail_node(&g_HeadListOsdCommit, &ListOsdOutput->list);
@@ -2238,7 +2239,7 @@ void* sstar_HdmiPlugsDetect_Thread(void * arg)
                 ret = MI_HDMIRX_GetSignalStatus(_g_HdmiRxPlayer.u8HdmirxPort, &_g_HdmiRxPlayer.eSignalStatus);
                 if(ret != MI_SUCCESS)
                 {
-                    printf("MI_HDMIRX_GetSignalStatus fail,ret=%d \n",ret);
+                    printf("MI_HDMIRX_GetSignalStatus fail,ret=0x%x \n",ret);
                 }
                 if(_g_HdmiRxPlayer.eSignalStatus == E_MI_HDMIRX_SIG_SUPPORT)
                 {
@@ -2282,7 +2283,7 @@ void* sstar_HdmiPlugsDetect_Thread(void * arg)
 
                         if(!_g_HdmiRxPlayer.pbConnected && !_g_HdmiRxPlayer.pIsCleaned)
                         {
-                            //printf("HdmiRx plugs out.\n");
+                            printf("HdmiRx plugs out.\n");
                             sstar_clear_plane(MOPG_ID0);
                             _g_HdmiRxPlayer.pIsCleaned = true;
                             memset(&_g_HdmiRxPlayer.pstTimingInfo, 0x00, sizeof(MI_HDMIRX_TimingInfo_t));
@@ -2439,23 +2440,12 @@ void *sstar_SclEnqueue_thread(void * param)
     {
 
         ListSclToGfx = get_first_node(&g_HeadListSclOutput);//get scl out buf
-        if(ListSclToGfx)
+        if(!ListSclToGfx)
         {
-            SclOutputBuffer = ListSclToGfx->pGraphicBuffer;
-
-            if(SclOutputBuffer == NULL)
-            {
-                printf("Warn: Get input buf from list is NULL \n");
-                continue;
-            }
-        }
-        else
-        {
-            //printf("Warn: Get input buf from list failed\n");
             usleep(3*1000);
             continue;
         }
-
+        SclOutputBuffer = ListSclToGfx->pGraphicBuffer;
         memset(&stDmaBufInfo, 0x00, sizeof(MI_SYS_DmaBufInfo_t));
         stDmaBufInfo.s32Fd[0] = SclOutputBuffer->getFd();
         stDmaBufInfo.s32Fd[1] = SclOutputBuffer->getFd();
@@ -2474,6 +2464,7 @@ void *sstar_SclEnqueue_thread(void * param)
         if (s32Ret != 0)
         {
             printf("MI_SYS_ChnOutputPortEnqueueDmabuf fail\n");
+            add_tail_node(&g_HeadListSclOutput, &ListSclToGfx->list);
             return NULL;
         }
         add_tail_node(&g_HeadListGpuGfxInput, &ListSclToGfx->list);
@@ -2547,37 +2538,17 @@ void *sstar_HdmiRxProcess_Thread(void * param)
         {
 
             GfxReadListNode = get_first_node(&g_HeadListGpuGfxInput);//get scl out buf
-            if(GfxReadListNode)
-            {
-                GfxInputBuffer = GfxReadListNode->pGraphicBuffer;
-                if(GfxInputBuffer == NULL)
-                {
-                    //error list,do not(add_tail_node) put it back
-                    continue;
-                }
-            }
-            else
+            if(GfxReadListNode == NULL)
             {
                 //printf("Warn: Get output buf from list failed\n");
                 continue;
             }
-
+            GfxInputBuffer = GfxReadListNode->pGraphicBuffer;
             s32Ret = MI_SYS_ChnOutputPortDequeueDmabuf(&stSclChnPort0, &stDmaOutputBufInfo);
-            if(stDmaOutputBufInfo.u32Status == MI_SYS_DMABUF_STATUS_INVALID)
+            if(stDmaOutputBufInfo.u32Status != MI_SYS_DMABUF_STATUS_DONE)
             {
-                printf("SclOutputPort DequeueDmabuf statu is INVALID\n");
-                s32Ret = MI_SYS_ChnOutputPortDropDmabuf(&stSclChnPort0, &stDmaOutputBufInfo);
-                if(MI_SUCCESS != s32Ret)
-                {
-                    printf("failed, drop dma-buf return fail\n");
-                }
                 add_tail_node(&g_HeadListSclOutput, &GfxReadListNode->list);
-                continue;
-            }
-            if(stDmaOutputBufInfo.u32Status == MI_SYS_DMABUF_STATUS_DROP)
-            {
-                printf("SclOutputPort DequeueDmabuf statu is DROP\n");
-                add_tail_node(&g_HeadListSclOutput, &GfxReadListNode->list);
+                printf("MI_SYS_ChnOutputPortDequeueDmabuf Invail=%d \n",stDmaOutputBufInfo.u32Status);
                 continue;
             }
 
@@ -2587,12 +2558,11 @@ void *sstar_HdmiRxProcess_Thread(void * param)
                 s32Ret = g_stdHdmiRxGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion[1], ListVideoOutput->pGraphicBuffer);
                 if (s32Ret) {
                     printf("g_stdHdmiRxGpuGfx Gpu graphic effect process failed\n");
+                    add_tail_node(&g_HeadListSclOutput, &GfxReadListNode->list);
                     continue;
                 }
-
                 add_tail_node(&g_HeadListSclOutput, &GfxReadListNode->list);
                 add_tail_node(&g_HeadListVideoCommit, &ListVideoOutput->list);
-
             }
             else
             {
@@ -2602,7 +2572,7 @@ void *sstar_HdmiRxProcess_Thread(void * param)
                     sstar_clear_plane(MOPG_ID0);
                 }
                 add_tail_node(&g_HeadListSclOutput, &GfxReadListNode->list);
-                usleep(10 * 1000);
+                usleep(5 * 1000);
             }
 
         }
@@ -2637,7 +2607,6 @@ void *sstar_VideoProcess_Thread(void * arg)
 
     while(g_bThreadExitGfx == TRUE)
     {
-        //if(_g_MediaPlayer.player_working && ListVideoOutput)
         if(_g_MediaPlayer.player_working)
         {
 
@@ -2647,6 +2616,7 @@ void *sstar_VideoProcess_Thread(void * arg)
                 ret = mm_player_get_video_frame(&frame_info);
                 if (ret < 0) {
                     usleep(5 * 1000);
+                    add_tail_node(&g_HeadListVideoOutput, &ListVideoOutput->list);//put list back
                     continue;
                 }
                 if (frame_info.format == AV_PIXEL_FMT_NV12)
@@ -2668,6 +2638,7 @@ void *sstar_VideoProcess_Thread(void * arg)
                     ret = g_stdVideoGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion[1], ListVideoOutput->pGraphicBuffer);
                     if (ret) {
                         printf("Video:Gpu graphic effect process failed,dma_buf_fd=%d getBufferSize=%d\n", frame_info.dma_buf_fd[0], GfxInputBuffer->getBufferSize());
+                        add_tail_node(&g_HeadListVideoOutput, &ListVideoOutput->list);//put list back
                         continue;
                     }
                     add_tail_node(&g_HeadListVideoCommit, &ListVideoOutput->list);
