@@ -28,6 +28,8 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <thread>
+#include <condition_variable>
 
 class GpuGraphicEffect {
   public:
@@ -142,9 +144,15 @@ class GpuGraphicEffect {
                                           float*& position, int32_t positionStride,
                                           float*& texCoord, int32_t texStride);
     bool updateDisplayDeformationMatrix();
+    int32_t processThreaded(std::shared_ptr<GpuGraphicBuffer> inputBuffer, Rect displayFrame,
+                            std::shared_ptr<GpuGraphicBuffer>& outputBuffer);
+    int32_t setSchedFifo();
+    void threadMain();
 
-    std::mutex mInitMutex;
+    mutable std::mutex mInitMutex;
     bool mInit;
+    mutable std::condition_variable mInitCondition;
+
     uint32_t mCurrentFrame;
     uint32_t mFboWidth;
     uint32_t mFboHeight;
@@ -169,7 +177,22 @@ class GpuGraphicEffect {
     // Cache of input images, keyed by corresponding dma buffer ID.
     std::deque<std::pair<uint64_t, EGLImageKHR>> mImageCache;
     std::mutex mImageCacheMutex;
-    std::mutex mMainMutex;
+
+    const char* const mThreadName = "Gpu graphic effect thread";
+    // Protects the creation and destruction of mThread.
+    mutable std::mutex mThreadMutex;
+    std::thread mThread;
+    bool mRunning = true;
+    mutable std::condition_variable mCondition;
+    bool mWaitForProcess;
+    mutable std::mutex mProcessMutex;
+    mutable std::condition_variable mProcessCondition;
+    mutable std::mutex mMainMutex;
+
+    std::shared_ptr<GpuGraphicBuffer> mInputBuffer;
+    Rect mDisplayFrame;
+    std::shared_ptr<GpuGraphicBuffer> mOutputBuffer;
+    int32_t mProcessStatus;
 
     // Keystone correction points offset
     uint32_t mPointLBOffsetX = 0;

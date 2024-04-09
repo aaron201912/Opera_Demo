@@ -28,6 +28,8 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <thread>
+#include <condition_variable>
 
 typedef struct {
     // Source buffer crop region.
@@ -60,6 +62,13 @@ class GpuGraphicRender {
         LOCATION_POSITION = 0,
         /* Coordinates for texture mapping */
         LOCATION_TEXCOORDS,
+    };
+
+    enum RenderType {
+        /* Fill render type */
+        FILL = 0,
+        /* Bitblit render type */
+        BITBLIT,
     };
 
     GpuGraphicRender();
@@ -114,8 +123,15 @@ class GpuGraphicRender {
     EGLImageKHR createEGLImageIfNeeded(std::shared_ptr<GpuGraphicBuffer> buffer);
     void generateVertex(FloatRect cropRect, Rect dstRect, Transform transfrom);
     uint64_t getUniqueId(int32_t fd);
+    int32_t fillThreaded(std::shared_ptr<GpuGraphicBuffer> dstBuffer, GrFillInfo info);
+    int32_t bitblitThreaded(std::shared_ptr<GpuGraphicBuffer> srcBuffer,
+                            std::shared_ptr<GpuGraphicBuffer> dstBuffer, GrBitblitInfo info);
+    int32_t setSchedFifo();
+    void threadMain();
 
+    mutable std::mutex mInitMutex;
     bool mInit;
+    mutable std::condition_variable mInitCondition;
 
     uint32_t mFormat;
     GLint mTarget;
@@ -136,7 +152,24 @@ class GpuGraphicRender {
     // Cache of input images, keyed by corresponding dma buffer ID.
     std::deque<std::pair<uint64_t, EGLImageKHR>> mImageCache;
     std::mutex mImageCacheMutex;
-    std::mutex mMainMutex;
+
+    const char* const mThreadName = "Gpu graphic render thread";
+    // Protects the creation and destruction of mThread.
+    mutable std::mutex mThreadMutex;
+    std::thread mThread;
+    bool mRunning = true;
+    mutable std::condition_variable mCondition;
+    bool mWaitForProcess;
+    mutable std::mutex mProcessMutex;
+    mutable std::condition_variable mProcessCondition;
+    mutable std::mutex mMainMutex;
+
+    std::shared_ptr<GpuGraphicBuffer> mDstBuffer;
+    std::shared_ptr<GpuGraphicBuffer> mSrcBuffer;
+    GrBitblitInfo mBitblitInfo;
+    GrFillInfo mFillInfo;
+    int32_t mProcessStatus;
+    RenderType mRenderType;
 
     EGLDisplay mDisplay;
     EGLContext mContext;
