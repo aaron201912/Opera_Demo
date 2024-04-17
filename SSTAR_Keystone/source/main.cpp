@@ -770,6 +770,7 @@ static int get_property_id(int fd, drmModeObjectProperties* props, const char* n
     return id;
 }
 
+#if 0
 static int get_property_value(int fd, drmModeObjectProperties* props, const char* name) {
     int value = 0;
     drmModePropertyPtr property;
@@ -786,7 +787,7 @@ static int get_property_value(int fd, drmModeObjectProperties* props, const char
 
     return value;
 }
-
+#endif
 
 int init_drm_property_ids(uint32_t plane_id, drm_property_ids_t* prop_ids)//int fd, uint32_t crtc_id, uint32_t plane_id, uint32_t conn_id,drm_property_ids_t* prop_ids)
 {
@@ -822,7 +823,6 @@ int init_drm_property_ids(uint32_t plane_id, drm_property_ids_t* prop_ids)//int 
         printf("Get properties error,plane_id=%d \n",plane_id);
         return -1;
     }
-    printf("plane_id=%d zpos=%d \n", plane_id, get_property_value(g_stDrmCfg.fd,props,"zpos"));
 
     prop_ids->FB_ID = get_property_id(g_stDrmCfg.fd, props, "FB_ID");
     prop_ids->CRTC_ID = get_property_id(g_stDrmCfg.fd, props, "CRTC_ID");
@@ -853,15 +853,17 @@ int init_drm_property_ids(uint32_t plane_id, drm_property_ids_t* prop_ids)//int 
     drmModeAtomicAddProperty(req, g_stDrmCfg.crtc_id, prop_ids->ACTIVE, 1);
     drmModeAtomicAddProperty(req, g_stDrmCfg.crtc_id, prop_ids->MODE_ID, g_stDrmCfg.blob_id);
     drmModeAtomicAddProperty(req, g_stDrmCfg.conn_id, prop_ids->CRTC_ID, g_stDrmCfg.crtc_id);
-    ret = drmModeAtomicCommit(g_stDrmCfg.fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK, NULL);
-
-    if(ret != 0)
+    if(plane_id == GOP_UI_ID)
     {
-        printf("drmModeAtomicCommit failed ret=%d plane_id=%d\n",ret,plane_id);
-        //return -1;
+        ret = drmModeAtomicCommit(g_stDrmCfg.fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK, NULL);
+
+        if(ret != 0)
+        {
+            printf("drmModeAtomicCommit failed ret=%d plane_id=%d\n",ret,plane_id);
+            //return -1;
+        }
     }
     drmModeAtomicFree(req);
-
     return 0;
 }
 
@@ -1014,6 +1016,7 @@ static void update_palne_dispinfo(drmModeAtomicReqPtr req, int plane_id, plane_i
 static int atomic_set_plane(unsigned int *fb_id, unsigned int *plane_clear, unsigned int *needUpdate) {
     int ret;
     drmModeAtomicReqPtr req;
+
     req = drmModeAtomicAlloc();
     if (!req) {
         printf("drmModeAtomicAlloc failed \n");
@@ -1057,7 +1060,7 @@ static int atomic_set_plane(unsigned int *fb_id, unsigned int *plane_clear, unsi
 
     drmModeAtomicAddProperty(req, g_stDrmCfg.crtc_id, g_stDrmCfg.drm_mode_prop_ids[1].FENCE_ID, (uint64_t)&g_stDrmCfg.out_fence);//use this flag,must be close out_fence
 
-    ret = drmModeAtomicCommit(g_stDrmCfg.fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET , NULL);
+    ret = drmModeAtomicCommit(g_stDrmCfg.fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK , NULL);
     if(ret != 0)
     {
         printf("[atomic_set_plane]drmModeAtomicCommit failed,ret=%d out_width=%d out_height=%d video_fb_id=%d\n",
@@ -1065,16 +1068,6 @@ static int atomic_set_plane(unsigned int *fb_id, unsigned int *plane_clear, unsi
     }
 
     drmModeAtomicFree(req);
-    if(g_stDrmCfg.out_fence != -1)
-    {
-        ret = sync_wait(g_stDrmCfg.out_fence, 16);
-        if(ret != 0)
-        {
-            printf("waring:maybe drop one drm frame, ret=%d out_fence=%d\n", ret, g_stDrmCfg.out_fence);
-        }
-        close(g_stDrmCfg.out_fence);
-        g_stDrmCfg.out_fence = -1;
-    }
 
     return 0;
 }
@@ -1094,10 +1087,8 @@ static int mm_cal_video_size(plane_info_t *video_info, int pic_width, int pic_he
     int origin_height   = 0;
     int auto_width      = 0;
     int auto_height     = 0;
-
     double video_ratio  = 1.0 * pic_width / pic_height;
     double panel_ratio  = 1.0 * video_info->in_width / video_info->in_height;
-
 
     if (panel_ratio > 1.78) {
         sar_16_9_width  = ALIGN_UP(video_info->in_height * 16 / 9, 2);
@@ -1940,7 +1931,6 @@ void *sstar_PointOffsetMoniter_Thread(void * arg)
 
 static void sstar_put_videobuf(    St_ListNode_t *ListVideoCommit)
 {
-
     if(g_TemFrameInfo.dma_buf_fd[0] != 0)
     {
         mm_player_put_video_frame(&g_TemFrameInfo);
@@ -1968,7 +1958,7 @@ void *sstar_DrmCommit_Thread(void * arg)
     std::shared_ptr<GpuGraphicBuffer> videoCommitBuf;
     memset(&osd_drm_buf, 0x00, sizeof(drm_buf_t));
     memset(&video_drm_buf, 0x00, sizeof(drm_buf_t));
-
+    int ret;
     while(g_bThreadExitCommit)
     {
         if(_g_MainCanvas.pIsCreated)
@@ -2004,13 +1994,12 @@ void *sstar_DrmCommit_Thread(void * arg)
         {
             ListVideoCommit = get_first_node(&g_HeadListVideoCommit);
             try_count = 5;
-            while((_g_HdmiRxPlayer.player_working || _g_MediaPlayer.player_working) && !ListVideoCommit &&  try_count)          //wait until get video buf
+            while((_g_HdmiRxPlayer.player_working || _g_MediaPlayer.player_working) && !ListVideoCommit &&  try_count)
             {
                 ListVideoCommit = get_first_node(&g_HeadListVideoCommit);
                 try_count --;
                 usleep(1 * 1000);
             }
-
             if(ListVideoCommit)
             {
                 videoCommitBuf = ListVideoCommit->pGraphicBuffer;
@@ -2035,10 +2024,6 @@ void *sstar_DrmCommit_Thread(void * arg)
                     ListVideoCommit = NULL;
                     printf("clear mop \n");
                 }
-            }
-            else
-            {
-                //printf("warn:get ListVideoCommit fail try_count=%d\n",try_count);
             }
         }
 
@@ -2073,12 +2058,23 @@ void *sstar_DrmCommit_Thread(void * arg)
                 prev_gop_gem_handle.first = osd_drm_buf.fb_id;
                 prev_gop_gem_handle.second = osd_drm_buf.gem_handle[0];
             }
+            //wait frame disp
+            if(g_stDrmCfg.out_fence != -1)
+            {
+                ret = sync_wait(g_stDrmCfg.out_fence, 20);
+                if(ret != 0)
+                {
+                    printf("waring:maybe drop one drm frame, ret=%d out_fence=%d\n", ret, g_stDrmCfg.out_fence);
+                }
+                close(g_stDrmCfg.out_fence);
+                g_stDrmCfg.out_fence = -1;
+            }
+
         }
     }
     printf("sstar_DrmCommit_Thread exit\n");
     return NULL;
 }
-
 
 static std::shared_ptr<GpuGraphicBuffer> sstar_draw_subcanvas(GrFillInfo srcFillInfo)
 {
@@ -2162,6 +2158,7 @@ static int sstar_draw_canvas(plane_info_t osdInfo)
         bitblitinfo.dstRect.left,bitblitinfo.dstRect.top,bitblitinfo.dstRect.right,bitblitinfo.dstRect.bottom);
 
     g_stdOsdGpuRender->bitblit(subFbCanvas, _g_MainCanvas.mainFbCanvas, bitblitinfo);
+
     pthread_mutex_unlock(&g_MainFbCanvas_mutex);
     return 0;
 
@@ -2656,6 +2653,7 @@ void *sstar_HdmiRxProcess_Thread(void * param)
 }
 
 #ifdef USE_GPUGFX_ROCESS
+
 #define MAKE_NV12_VALUE(y,u,v,a)  ((y) << 24) | ((u) << 16) | ((v) << 8) | (a)
 #define YUYV_BLACK              MAKE_NV12_VALUE(0,128,128,0)
 #define YUYV_RED                MAKE_NV12_VALUE(76,84,255,0)
@@ -2664,10 +2662,6 @@ void *sstar_HdmiRxProcess_Thread(void * param)
 static std::shared_ptr<GpuGraphicBuffer> sstar_frame_process(std::shared_ptr<GpuGraphicBuffer> inputBuffer)
 {
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
-    unsigned long eTime1;
-    unsigned long eTime2;
-    unsigned long eTime3;
-    struct timeval timeEnqueue1;
     std::shared_ptr<GpuGraphicBuffer>   pDstGraphicBuffer;
     GrFillInfo dstFillInfo;
     int ret;
@@ -2700,17 +2694,8 @@ static std::shared_ptr<GpuGraphicBuffer> sstar_frame_process(std::shared_ptr<Gpu
     dstFillInfo.rect.right = g_stDrmCfg.width;
     dstFillInfo.rect.bottom = g_stDrmCfg.height;
     dstFillInfo.color = YUYV_BLACK;
-    gettimeofday(&timeEnqueue1, NULL);
-    eTime1 =timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
 
     g_stdGfxGpuRender->fill(pDstGraphicBuffer, dstFillInfo);
-    gettimeofday(&timeEnqueue1, NULL);
-
-    eTime2 =timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
-    if((eTime2 - eTime1) > 8)
-    {
-        printf("fill time: %d \n", (eTime2 - eTime1) );
-    }
 
     //printf("src[%d,%d,%d,%d] dst[%d,%d,%d,%d] color=%d\n",bitblitinfo.srcRect.left,bitblitinfo.srcRect.top,bitblitinfo.srcRect.right,bitblitinfo.srcRect.bottom,
     //    bitblitinfo.dstRect.left,bitblitinfo.dstRect.top,bitblitinfo.dstRect.right,bitblitinfo.dstRect.bottom,dstFillInfo.color);
@@ -2720,18 +2705,9 @@ static std::shared_ptr<GpuGraphicBuffer> sstar_frame_process(std::shared_ptr<Gpu
         printf("Video:Gpu graphicbitblits failed,IgetBufferSize=%d getBufferSize=%d\n", inputBuffer->getBufferSize(), pDstGraphicBuffer->getBufferSize());
         return NULL;
     }
-
-    gettimeofday(&timeEnqueue1, NULL);
-    eTime3 =timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
-    if((eTime3 - eTime2) > 8)
-    {
-        printf("bitblit time: %d \n", (eTime3 - eTime2) );
-    }
-
-
     return pDstGraphicBuffer;
-
 }
+
 #endif
 
 void *sstar_VideoProcess_Thread(void * arg)
@@ -2750,9 +2726,7 @@ void *sstar_VideoProcess_Thread(void * arg)
     uint32_t u32Width  = g_stDrmCfg.width;
     uint32_t u32Height = g_stDrmCfg.height;
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
-    unsigned long eTime1;
-    unsigned long eTime2;
-    struct timeval timeEnqueue1;
+
     sstar_clear_plane(MOPG_ID0);
     while(g_bThreadExitGfx)
     {
@@ -2779,7 +2753,6 @@ void *sstar_VideoProcess_Thread(void * arg)
                     add_tail_node(&g_HeadListVideoOutput, &ListVideoOutput->list);//put list back
                     continue;
                 }
-                try_count = 5;
 
                 if (frame_info.format == AV_PIXEL_FMT_NV12)
                 {
@@ -2859,7 +2832,7 @@ void *sstar_VideoProcess_Thread(void * arg)
         }
         else
         {
-            printf("player_working=%d \n",_g_MediaPlayer.player_working);
+            //printf("player_working=%d \n",_g_MediaPlayer.player_working);
             usleep(3*1000);
         }
     }
