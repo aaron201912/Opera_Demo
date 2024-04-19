@@ -59,11 +59,13 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 
 #include "sstar_drm.h"
 
+#include "sstar_sensor_demo.h"
 
 #define VEDIO_WIDTH     1920
 #define VEDIO_HEIGHT    1080
 
-//#define DUMP_OPTION
+
+#define DUMP_OPTION
 
 #define USE_GPUGFX_ROCESS
 
@@ -334,7 +336,8 @@ typedef struct DrmModeConfiction_s
     int out_fence;
     unsigned int crtc_id;
     unsigned int has_modifiers;
-    unsigned int commited;
+    unsigned int osd_commited;
+    unsigned int mop_commited;
     unsigned int conn_id;
     unsigned int width;
     unsigned int height;
@@ -377,12 +380,15 @@ MI_U16 g_u16DispHeight = 0;
 
 
 MI_U8 g_u8PipelineMode;
-char  g_InputFile[128];
+char  *g_InputFile;
 char  g_InputUiPath[128];
 
 MI_BOOL bShowUi = 0;
 
 pthread_t hdmi_detect_thread;
+
+pthread_t g_pThreadSnrReceive = 0;
+MI_BOOL g_bThreadExitReceive = TRUE;
 
 pthread_t hvp_event_thread;
 static bool hvp_event_thread_running = false;
@@ -1028,9 +1034,9 @@ static int atomic_set_plane(unsigned int *fb_id, unsigned int *plane_clear, unsi
         add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].FB_ID , fb_id[0]);
         add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_ID, g_stDrmCfg.crtc_id);
 
-        if(needUpdate[0] || !g_stDrmCfg.commited)
+        if(needUpdate[0] || !g_stDrmCfg.osd_commited)
         {
-            g_stDrmCfg.commited = 1;
+            g_stDrmCfg.osd_commited = 1;
             update_palne_dispinfo(req, GOP_UI_ID, g_CurOsdInfo);
         }
     }
@@ -1046,11 +1052,11 @@ static int atomic_set_plane(unsigned int *fb_id, unsigned int *plane_clear, unsi
     {
         add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].FB_ID, fb_id[1]);
         add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_ID, g_stDrmCfg.crtc_id);
-        if(needUpdate[1])
+        if(needUpdate[1] || !g_stDrmCfg.mop_commited)
         {
+            g_stDrmCfg.mop_commited = 1;
             update_palne_dispinfo(req, MOPG_ID0, g_CurVideoInfo);
         }
-
     }
     else if(plane_clear[1] == 1)
     {
@@ -1064,7 +1070,7 @@ static int atomic_set_plane(unsigned int *fb_id, unsigned int *plane_clear, unsi
     if(ret != 0)
     {
         printf("[atomic_set_plane]drmModeAtomicCommit failed,ret=%d out_width=%d out_height=%d video_fb_id=%d\n",
-            ret,_g_MediaPlayer.video_info.out_width,_g_MediaPlayer.video_info.out_height,fb_id[1]);
+            ret, g_CurVideoInfo.out_width, g_CurVideoInfo.out_height,fb_id[1]);
     }
 
     drmModeAtomicFree(req);
@@ -1087,43 +1093,76 @@ static int mm_cal_video_size(plane_info_t *video_info, int pic_width, int pic_he
     int origin_height   = 0;
     int auto_width      = 0;
     int auto_height     = 0;
-    double video_ratio  = 1.0 * pic_width / pic_height;
-    double panel_ratio  = 1.0 * video_info->in_width / video_info->in_height;
 
-    if (panel_ratio > 1.78) {
-        sar_16_9_width  = ALIGN_UP(video_info->in_height * 16 / 9, 2);
-        sar_16_9_height = video_info->in_height;
-    } else {
-        sar_16_9_width  = video_info->in_width;
-        sar_16_9_height = ALIGN_UP(video_info->in_width * 9 / 16, 2);
+
+    double video_ratio  = 1.0 * pic_width / pic_height;     //Decode
+    double panel_ratio  = 1.0 * video_info->in_width / video_info->in_height;    //actual panel
+
+    int disp_max_width = video_info->in_width > pic_width ? pic_width:video_info->in_width;
+    int disp_max_height = video_info->in_height > pic_height ? pic_height:video_info->in_height;
+    double disp_max_ratio  = 1.0 * disp_max_width / disp_max_height; ;    //actual panel
+
+    printf("disp_max_width=%d disp_max_height=%d disp_max_ratio=%f\n", disp_max_width, disp_max_height, disp_max_ratio);
+
+    if(disp_max_width > disp_max_height) //landscape
+    {
+        if (panel_ratio > 1.78) {
+            sar_16_9_width  = ALIGN_UP(video_info->in_height * 16 / 9, 2);
+            sar_16_9_height = video_info->in_height;
+        } else {
+            sar_16_9_width  = video_info->in_width;
+            sar_16_9_height = ALIGN_UP(video_info->in_width * 9 / 16, 2);
+        }
+
+        if (panel_ratio > 1.34) {
+            sar_4_3_width  = ALIGN_UP(video_info->in_height * 4 / 3, 2);
+            sar_4_3_height = video_info->in_height;
+        } else {
+            sar_4_3_width  = video_info->in_width;
+            sar_4_3_height = ALIGN_UP(video_info->in_width * 3 / 4, 2);
+        }
+
+        if (panel_ratio / video_ratio > 1.0) {
+            origin_height = MIN(pic_height, video_info->in_height);
+            origin_width  = MIN(ALIGN_UP(origin_height * pic_width / pic_height, 2), video_info->in_width);
+        } else {
+            origin_width  = MIN(pic_width, video_info->in_width);
+            origin_height = MIN(ALIGN_UP(origin_width * pic_height / pic_width, 2), video_info->in_height);
+        }
+
+        if (panel_ratio / video_ratio > 1.0) {
+            auto_height = video_info->in_height;
+            auto_width  = ALIGN_UP(auto_height * pic_width / pic_height, 2);
+        } else {
+            auto_width  = video_info->in_width;
+            auto_height = ALIGN_UP(auto_width * pic_height / pic_width, 2);
+        }
     }
+    else    //vertical
+    {
 
-    if (panel_ratio > 1.34) {
-        sar_4_3_width  = ALIGN_UP(video_info->in_height * 4 / 3, 2);
-        sar_4_3_height = video_info->in_height;
-    } else {
-        sar_4_3_width  = video_info->in_width;
-        sar_4_3_height = ALIGN_UP(video_info->in_width * 3 / 4, 2);
+        sar_16_9_width  = disp_max_width;
+        sar_16_9_height = ALIGN_UP(disp_max_width * 9 / 16, 2);
+
+        sar_4_3_width  = disp_max_width;
+        sar_4_3_height = ALIGN_UP(disp_max_width * 3 / 4, 2);
+
+        if (disp_max_ratio / video_ratio > 1.0) {
+            origin_height = MIN(pic_height, disp_max_height);
+            origin_width  = MIN(ALIGN_UP(origin_height * pic_width / pic_height, 2), disp_max_width);
+        } else {
+            origin_width  = MIN(pic_width, disp_max_width);
+            origin_height = MIN(ALIGN_UP(origin_width * pic_height / pic_width, 2), disp_max_height);
+        }
+
+        if (disp_max_ratio / video_ratio > 1.0) {
+            auto_height = disp_max_height;
+            auto_width  = ALIGN_UP(auto_height * pic_width / pic_height, 2);
+        } else {
+            auto_width  = disp_max_width;
+            auto_height = ALIGN_UP(auto_width * pic_height / pic_width, 2);
+        }
     }
-
-    if (panel_ratio / video_ratio > 1.0) {
-        origin_height = MIN(pic_height, video_info->in_height);
-        origin_width  = MIN(ALIGN_UP(origin_height * pic_width / pic_height, 2), video_info->in_width);
-    } else {
-        origin_width  = MIN(pic_width, video_info->in_width);
-        origin_height = MIN(ALIGN_UP(origin_width * pic_height / pic_width, 2), video_info->in_height);
-    }
-    //printf("panel_ratio=%f video_ratio=%f pic_width w/h=[%d %d], video_info w/h=[%d %d], origin_width w/h=[%d %d] \n",
-    //                    panel_ratio,video_ratio,pic_width,pic_height,video_info->in_width,video_info->in_height,origin_width,origin_height);
-
-    if (panel_ratio / video_ratio > 1.0) {
-        auto_height = video_info->in_height;
-        auto_width  = ALIGN_UP(auto_height * pic_width / pic_height, 2);
-    } else {
-        auto_width  = video_info->in_width;
-        auto_height = ALIGN_UP(auto_width * pic_height / pic_width, 2);
-    }
-
 
     screen_width  = video_info->in_width;
     screen_height = video_info->in_height;
@@ -1232,7 +1271,8 @@ static int sstar_set_ratio(int ratio)
 
     // set video size by rotate
     mm_cal_rotate_size(&_g_MediaPlayer.video_info);
-    printf("mm_set_video_size  rotate=%d dec_width=%d dec_height=%d .\n",_g_MediaPlayer.video_info.rotate, _g_MediaPlayer.video_info.dec_width, _g_MediaPlayer.video_info.dec_height);
+    printf("mm_set_video_size  rotate=%d dec_width=%d dec_height=%d x=%d y=%d out_width=%d out_height=%d.\n",_g_MediaPlayer.video_info.rotate, _g_MediaPlayer.video_info.dec_width, _g_MediaPlayer.video_info.dec_height,
+        _g_MediaPlayer.video_info.pos_x, _g_MediaPlayer.video_info.pos_y,_g_MediaPlayer.video_info.out_width, _g_MediaPlayer.video_info.out_height);
 
     mm_player_set_dec_out_attr(_g_MediaPlayer.video_info.dec_width, _g_MediaPlayer.video_info.dec_height);
     return 0;
@@ -1254,8 +1294,6 @@ static int mm_set_video_size(seq_info_t *seq_info)
     // reset in width/height
     _g_MediaPlayer.stream_width = strm_width;
     _g_MediaPlayer.stream_height = strm_height;
-    _g_MediaPlayer.video_info.in_width  = _g_MediaPlayer.param.panel_width;
-    _g_MediaPlayer.video_info.in_height = _g_MediaPlayer.param.panel_height;
 
     sstar_set_ratio(_g_MediaPlayer.video_info.ratio);
     return 0;
@@ -1827,24 +1865,19 @@ static void sstar_media_context_init()
     _g_MediaPlayer.param.url = g_InputFile;
 
 
-    if (_g_MediaPlayer.video_info.rotate != AV_ROTATE_NONE && _g_MediaPlayer.video_info.rotate != AV_ROTATE_180) {
+    if (_g_rotate_mode == AV_ROTATE_NONE || _g_rotate_mode == AV_ROTATE_180)
+    {
+        _g_MediaPlayer.video_info.in_width  = g_stDrmCfg.width;
+        _g_MediaPlayer.video_info.in_height = g_stDrmCfg.height;
 
-        _g_MediaPlayer.param.panel_width = g_stDrmCfg.height;//1920
-        _g_MediaPlayer.param.panel_height = g_stDrmCfg.width;//1080
-        //_g_MediaPlayer.video_info.in_width  = _g_MediaPlayer.param.panel_height;
-       // _g_MediaPlayer.video_info.in_height = _g_MediaPlayer.param.panel_width;
-
-    } else {
-        _g_MediaPlayer.param.panel_width = g_stDrmCfg.width;//1080
-        _g_MediaPlayer.param.panel_height = g_stDrmCfg.height;//1920
-        //_g_MediaPlayer.video_info.in_width  = _g_MediaPlayer.param.panel_width;
-        //_g_MediaPlayer.video_info.in_height = _g_MediaPlayer.param.panel_height;
-
-
+    } else
+    {
+        _g_MediaPlayer.video_info.in_width  = g_stDrmCfg.height;
+        _g_MediaPlayer.video_info.in_height = g_stDrmCfg.width;
     }
 
-    _g_MediaPlayer.video_info.in_width  = _g_MediaPlayer.param.panel_width;
-    _g_MediaPlayer.video_info.in_height = _g_MediaPlayer.param.panel_height;
+    _g_MediaPlayer.param.panel_width = VEDIO_WIDTH;
+    _g_MediaPlayer.param.panel_height = VEDIO_HEIGHT;
 
     mm_player_set_opts("audio_format", "", AV_PCM_FMT_S16);
     mm_player_set_opts("audio_channels", "", 2);
@@ -1946,6 +1979,84 @@ static void sstar_put_videobuf(    St_ListNode_t *ListVideoCommit)
         memcpy(&g_TemFrameInfo, &ListVideoCommit->frame_info, sizeof(frame_info_t));
     }
 }
+
+#ifdef USE_GPUGFX_ROCESS
+
+#define MAKE_NV12_VALUE(y,u,v,a)  ((y) << 24) | ((u) << 16) | ((v) << 8) | (a)
+#define YUYV_BLACK              MAKE_NV12_VALUE(0,128,128,0)
+#define YUYV_RED                MAKE_NV12_VALUE(76,84,255,0)
+#define YUYV_BLUE               MAKE_NV12_VALUE(29,225,107,0)
+
+static std::shared_ptr<GpuGraphicBuffer> sstar_frame_process(std::shared_ptr<GpuGraphicBuffer> inputBuffer)
+{
+    uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
+    std::shared_ptr<GpuGraphicBuffer>   pDstGraphicBuffer;
+    GrFillInfo dstFillInfo;
+    int ret;
+    if(!g_stdGfxGpuRender)
+    {
+        g_stdGfxGpuRender = std::make_shared<GpuGraphicRender>();
+        g_stdGfxGpuRender->init(u32GpuInputFormat);
+        memset(&g_CurVideoInfo, 0x00, sizeof(plane_info_t));
+    }
+
+    pDstGraphicBuffer = std::make_shared<GpuGraphicBuffer>(g_stDrmCfg.width, g_stDrmCfg.height, u32GpuInputFormat, ALIGN_UP(g_stDrmCfg.width, 64));
+    if (!pDstGraphicBuffer->initCheck())
+    {
+        printf("Error Create GpuGraphicBuffer failed\n");
+        return NULL;
+    }
+
+    dstFillInfo.rect.left = 0;
+    dstFillInfo.rect.top = 0;
+    dstFillInfo.rect.right = g_stDrmCfg.width;
+    dstFillInfo.rect.bottom = g_stDrmCfg.height;
+    dstFillInfo.color = YUYV_BLACK;
+
+    g_stdGfxGpuRender->fill(pDstGraphicBuffer, dstFillInfo);
+
+    GrBitblitInfo bitblitinfo;
+    bitblitinfo.transfrom = NONE;
+    bitblitinfo.srcRect.left = 0;
+    bitblitinfo.srcRect.top = 0;
+    bitblitinfo.srcRect.right = inputBuffer->getWidth();
+    bitblitinfo.srcRect.bottom = inputBuffer->getHeight();
+
+    bitblitinfo.dstRect.left = _g_MediaPlayer.video_info.pos_x;
+    bitblitinfo.dstRect.top = _g_MediaPlayer.video_info.pos_y;
+
+    if((_g_MediaPlayer.video_info.pos_x + _g_MediaPlayer.video_info.out_width) > (int)g_stDrmCfg.width)
+    {
+        bitblitinfo.dstRect.right = g_stDrmCfg.width;
+    }
+    else
+    {
+        bitblitinfo.dstRect.right = _g_MediaPlayer.video_info.pos_y + _g_MediaPlayer.video_info.out_width;
+    }
+
+
+    if((_g_MediaPlayer.video_info.pos_y + _g_MediaPlayer.video_info.out_height) > (int)g_stDrmCfg.height)
+    {
+        bitblitinfo.dstRect.bottom = g_stDrmCfg.height;
+    }
+    else
+    {
+        bitblitinfo.dstRect.bottom = _g_MediaPlayer.video_info.pos_y + _g_MediaPlayer.video_info.out_height;
+    }
+    //printf("src[%d,%d,%d,%d] dst[%d,%d,%d,%d] color=%d\n",bitblitinfo.srcRect.left,bitblitinfo.srcRect.top,bitblitinfo.srcRect.right,bitblitinfo.srcRect.bottom,
+    //    bitblitinfo.dstRect.left,bitblitinfo.dstRect.top,bitblitinfo.dstRect.right,bitblitinfo.dstRect.bottom,dstFillInfo.color);
+
+    ret = g_stdGfxGpuRender->bitblit(inputBuffer, pDstGraphicBuffer, bitblitinfo);
+    if (ret) {
+        printf("Video:Gpu graphicbitblits failed,IgetBufferSize=%d getBufferSize=%d\n", inputBuffer->getBufferSize(), pDstGraphicBuffer->getBufferSize());
+        return NULL;
+    }
+    return pDstGraphicBuffer;
+}
+
+#endif
+
+
 
 void *sstar_DrmCommit_Thread(void * arg)
 {
@@ -2559,7 +2670,7 @@ void *sstar_HdmiRxProcess_Thread(void * param)
     g_RectDisplayRegion[1].right = g_stDrmCfg.width;
     g_RectDisplayRegion[1].bottom = g_stDrmCfg.height;
 
-    g_stdHdmiRxGpuGfx = sstar_gpugfx_context_init(u32Width, u32Height, u32GpuInputFormat, false);
+    //g_stdHdmiRxGpuGfx = sstar_gpugfx_context_init(u32Width, u32Height, u32GpuInputFormat, false);
 
     struct timeval tv;
     MI_S32 s32FdSclPort0 = -1;
@@ -2613,15 +2724,62 @@ void *sstar_HdmiRxProcess_Thread(void * param)
             {
                 if(!g_bGpuProcessNeed)
                 {
+                    if(g_stdHdmiRxGpuGfx)
+                    {
+                        g_stdHdmiRxGpuGfx->deinit();
+                        g_stdHdmiRxGpuGfx = NULL;
+                    }
+
+#ifdef USE_GPUGFX_ROCESS   //use gpu bitblit to scl up/down
+
+                    _g_MediaPlayer.video_info.pos_x = 0;
+                    _g_MediaPlayer.video_info.pos_y = 0;
+                    _g_MediaPlayer.video_info.out_width = GfxInputBuffer->getWidth() > g_stDrmCfg.width ? g_stDrmCfg.width:GfxInputBuffer->getWidth();
+                    _g_MediaPlayer.video_info.out_height = GfxInputBuffer->getHeight() > g_stDrmCfg.height ? g_stDrmCfg.height:GfxInputBuffer->getHeight();
+                    ListVideoOutput->pGraphicBuffer = sstar_frame_process(GfxInputBuffer);
+
+#else   //use drm to scl up
+
+                    _g_MediaPlayer.video_info.pos_x = 0;
+                    _g_MediaPlayer.video_info.pos_y = 0;
+                    _g_MediaPlayer.video_info.out_width = GfxInputBuffer->getWidth();
+                    _g_MediaPlayer.video_info.out_height = GfxInputBuffer->getHeight();
                     ListVideoOutput->pGraphicBuffer = GfxInputBuffer;
+                    if((GfxInputBuffer->getWidth() > g_stDrmCfg.width) || (GfxInputBuffer->getHeight() > g_stDrmCfg.height))
+                    {
+                        printf("Error: src buf is large than panel size ,please check:getWidth=%d  getHeight=%d\n",GfxInputBuffer->getWidth(),GfxInputBuffer->getHeight());
+                        add_tail_node(&g_HeadListSclOutput, &GfxReadListNode->list);
+                        add_tail_node(&g_HeadListVideoOutput, &ListVideoOutput->list);
+                        continue;
+                    }
+
+                    if(memcmp(&g_CurVideoInfo, &_g_MediaPlayer.video_info, sizeof(plane_info_t)))
+                    {
+                        memcpy(&g_CurVideoInfo, &_g_MediaPlayer.video_info, sizeof(plane_info_t));
+                        ListVideoOutput->planeNeedUpdate = true;
+                    }
+
+#endif
                 }
                 else
                 {
                     pthread_mutex_lock(&g_HdmiRXProcessMutex);
+                    if(!g_stdHdmiRxGpuGfx)
+                    {
+                        if(g_stdGfxGpuRender)
+                        {
+                            g_stdGfxGpuRender->deinit();
+                            g_stdGfxGpuRender = NULL;
+                        }
+                        g_stdHdmiRxGpuGfx = sstar_gpugfx_context_init(u32Width, u32Height, u32GpuInputFormat, false);
+                        ListVideoOutput->planeNeedUpdate = true;
+                        memset(&g_CurVideoInfo, 0x00, sizeof(plane_info_t));
+                    }
                     s32Ret = g_stdHdmiRxGpuGfx->process(GfxInputBuffer, g_RectDisplayRegion[1], ListVideoOutput->pGraphicBuffer);
                     if (s32Ret) {
                         printf("g_stdHdmiRxGpuGfx Gpu graphic effect process failed\n");
                         add_tail_node(&g_HeadListSclOutput, &GfxReadListNode->list);
+                        add_tail_node(&g_HeadListVideoOutput, &ListVideoOutput->list);
                         pthread_mutex_unlock(&g_HdmiRXProcessMutex);
                         continue;
                     }
@@ -2651,64 +2809,6 @@ void *sstar_HdmiRxProcess_Thread(void * param)
 
     return NULL;
 }
-
-#ifdef USE_GPUGFX_ROCESS
-
-#define MAKE_NV12_VALUE(y,u,v,a)  ((y) << 24) | ((u) << 16) | ((v) << 8) | (a)
-#define YUYV_BLACK              MAKE_NV12_VALUE(0,128,128,0)
-#define YUYV_RED                MAKE_NV12_VALUE(76,84,255,0)
-#define YUYV_BLUE               MAKE_NV12_VALUE(29,225,107,0)
-
-static std::shared_ptr<GpuGraphicBuffer> sstar_frame_process(std::shared_ptr<GpuGraphicBuffer> inputBuffer)
-{
-    uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
-    std::shared_ptr<GpuGraphicBuffer>   pDstGraphicBuffer;
-    GrFillInfo dstFillInfo;
-    int ret;
-    if(!g_stdGfxGpuRender)
-    {
-        g_stdGfxGpuRender = std::make_shared<GpuGraphicRender>();
-        g_stdGfxGpuRender->init(u32GpuInputFormat);
-        memset(&g_CurVideoInfo, 0x00, sizeof(plane_info_t));
-    }
-    GrBitblitInfo bitblitinfo;
-    bitblitinfo.srcRect.left = 0;
-    bitblitinfo.srcRect.top = 0;
-    bitblitinfo.srcRect.right = inputBuffer->getWidth();
-    bitblitinfo.srcRect.bottom = inputBuffer->getHeight();
-
-    bitblitinfo.dstRect.left = _g_MediaPlayer.video_info.pos_x;
-    bitblitinfo.dstRect.top = _g_MediaPlayer.video_info.pos_y;
-    bitblitinfo.dstRect.right = _g_MediaPlayer.video_info.pos_x + _g_MediaPlayer.video_info.out_width;
-    bitblitinfo.dstRect.bottom = _g_MediaPlayer.video_info.pos_y + _g_MediaPlayer.video_info.out_height;
-
-    pDstGraphicBuffer = std::make_shared<GpuGraphicBuffer>(g_stDrmCfg.width, g_stDrmCfg.height, u32GpuInputFormat, ALIGN_UP(g_stDrmCfg.width, 64));
-    if (!pDstGraphicBuffer->initCheck())
-    {
-        printf("Error Create GpuGraphicBuffer failed\n");
-        return NULL;
-    }
-
-    dstFillInfo.rect.left = 0;
-    dstFillInfo.rect.top = 0;
-    dstFillInfo.rect.right = g_stDrmCfg.width;
-    dstFillInfo.rect.bottom = g_stDrmCfg.height;
-    dstFillInfo.color = YUYV_BLACK;
-
-    g_stdGfxGpuRender->fill(pDstGraphicBuffer, dstFillInfo);
-
-    //printf("src[%d,%d,%d,%d] dst[%d,%d,%d,%d] color=%d\n",bitblitinfo.srcRect.left,bitblitinfo.srcRect.top,bitblitinfo.srcRect.right,bitblitinfo.srcRect.bottom,
-    //    bitblitinfo.dstRect.left,bitblitinfo.dstRect.top,bitblitinfo.dstRect.right,bitblitinfo.dstRect.bottom,dstFillInfo.color);
-
-    ret = g_stdGfxGpuRender->bitblit(inputBuffer, pDstGraphicBuffer, bitblitinfo);
-    if (ret) {
-        printf("Video:Gpu graphicbitblits failed,IgetBufferSize=%d getBufferSize=%d\n", inputBuffer->getBufferSize(), pDstGraphicBuffer->getBufferSize());
-        return NULL;
-    }
-    return pDstGraphicBuffer;
-}
-
-#endif
 
 void *sstar_VideoProcess_Thread(void * arg)
 {
@@ -2783,12 +2883,17 @@ void *sstar_VideoProcess_Thread(void * arg)
                         memcpy(&ListVideoOutput->frame_info, &frame_info, sizeof(frame_info_t));
 #else   //use drm to scl up
 
+                        if((GfxInputBuffer->getWidth() > g_stDrmCfg.width) || (GfxInputBuffer->getHeight() > g_stDrmCfg.height))
+                        {
+                            printf("Error: src buf is large than panel size ,please check,or enable USE_GPUGFX_ROCESS \n");
+                            add_tail_node(&g_HeadListVideoOutput, &ListVideoOutput->list);//put list back
+                            continue;
+                        }
                         ListVideoOutput->pGraphicBuffer = GfxInputBuffer;
                         memcpy(&ListVideoOutput->frame_info, &frame_info, sizeof(frame_info_t));
                         if(memcmp(&g_CurVideoInfo, &_g_MediaPlayer.video_info, sizeof(plane_info_t)))
                         {
                             memcpy(&g_CurVideoInfo, &_g_MediaPlayer.video_info, sizeof(plane_info_t));
-
                             ListVideoOutput->planeNeedUpdate = true;
                         }
 #endif
@@ -2893,6 +2998,107 @@ static void *sstar_PlayerMoniter_Thread(void *args)
     }
     printf("[%s %d]exit!\n", __FUNCTION__, __LINE__);
 
+    return NULL;
+}
+
+
+static void *sstar_SensorFrame_Receive(void *param)
+{
+    int ret;
+    MI_SYS_FrameData_t stFrameData;
+    St_ListNode_t *ListVideoOutput;
+    std::shared_ptr<GpuGraphicBuffer> GfxInputBuffer;
+    uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
+    void *pVaddr_In;
+    int i = 0;
+    MI_SYS_BUF_HANDLE stBufHandle;
+    Sensor_Attr_t sensorAttr;
+    sstar_get_sensor_attr(0, &sensorAttr);
+#if 1  //for disp
+    _g_MediaPlayer.pIsCreated = true;
+    _g_MediaPlayer.player_working = true;
+    _g_MediaPlayer.video_info.pos_x = 0;
+    _g_MediaPlayer.video_info.pos_y = 0;
+    _g_MediaPlayer.video_info.out_width = sensorAttr.u16Width;
+    _g_MediaPlayer.video_info.out_height = sensorAttr.u16Height;
+#else  //for dump
+
+    int count = 3;
+    FILE *out_fd = NULL;
+    out_fd = open_dump_file("/customer/dump_snr.yuv");
+#endif
+
+    sstar_clear_plane(MOPG_ID0);
+
+    while(g_bThreadExitReceive)
+    {
+        ListVideoOutput = get_first_node(&g_HeadListVideoOutput);//get commit buf
+        if(ListVideoOutput == NULL)
+        {
+            //printf("Warn: Get output buf from list failed\n");
+            usleep(1 * 1000);
+            continue;
+        }
+
+        ret = sstar_get_snr_frame(&stFrameData, &stBufHandle);
+        if(ret < 0)
+        {
+            usleep(1 * 1000);
+            printf("sstar_get_snr_frame fail\n");
+            continue;
+        }
+
+
+#if 1
+        GfxInputBuffer = std::make_shared<GpuGraphicBuffer>(stFrameData.u16Width, stFrameData.u16Height, u32GpuInputFormat, ALIGN_UP(stFrameData.u16Width, 64));
+        if (!GfxInputBuffer->initCheck())
+        {
+            printf("Error Create GpuGraphicBuffer failed\n");
+            add_tail_node(&g_HeadListVideoOutput, &ListVideoOutput->list);//put list back
+            continue;
+        }
+        pVaddr_In = GfxInputBuffer->map(READWRITE);
+
+        for(i = 0; i < stFrameData.u16Height ;i++)
+        {
+            memcpy((char *)pVaddr_In + (i * GfxInputBuffer->getStride()[0]), (char *)stFrameData.pVirAddr[0] + (i * stFrameData.u32Stride[0]), stFrameData.u32Stride[0]);
+        }
+        for(i = 0; i < stFrameData.u16Height/2 ;i++)
+        {
+            memcpy((char *)pVaddr_In + ((i + stFrameData.u16Height) * GfxInputBuffer->getStride()[0]),
+                (char *) stFrameData.pVirAddr[1] + (i * stFrameData.u32Stride[1]), stFrameData.u32Stride[1]);
+        }
+
+        GfxInputBuffer->flushCache(READWRITE);
+        GfxInputBuffer->unmap(pVaddr_In, READWRITE);
+
+
+#ifdef USE_GPUGFX_ROCESS   //use gpu bitblit to scl up
+
+        ListVideoOutput->pGraphicBuffer = sstar_frame_process(GfxInputBuffer);
+#else
+        ListVideoOutput->pGraphicBuffer = GfxInputBuffer;
+#endif
+        add_tail_node(&g_HeadListVideoCommit, &ListVideoOutput->list);
+#else //for dump
+        if(count > 0)
+        {
+            if(out_fd)
+            {
+                wirte_dump_file(out_fd, (char *)stFrameData.pVirAddr[0], stFrameData.u16Height * stFrameData.u32Stride[0]);
+                wirte_dump_file(out_fd, (char *)stFrameData.pVirAddr[1], stFrameData.u16Height * stFrameData.u32Stride[1]/2);
+            }
+            count --;
+        }
+        if(count == 0)
+        {
+            close_dump_file(out_fd);
+        }
+#endif
+        sstar_put_snr_frame(stBufHandle);
+
+    }
+    printf("sstar_SensorFrame_Receive exit\n");
     return NULL;
 }
 
@@ -3016,8 +3222,8 @@ static MI_S32 sstar_hvp_init()
     stHvpChnParam.stChnSrcParam.enColorRange = E_MI_HVP_COLOR_RANGE_TYPE_FULL;
     stHvpChnParam.stChnSrcParam.stCropWin.u16X = 0;
     stHvpChnParam.stChnSrcParam.stCropWin.u16Y = 0;
-    stHvpChnParam.stChnSrcParam.stCropWin.u16Width = VEDIO_WIDTH;
-    stHvpChnParam.stChnSrcParam.stCropWin.u16Height = VEDIO_HEIGHT;
+    //stHvpChnParam.stChnSrcParam.stCropWin.u16Width = VEDIO_WIDTH;
+    //stHvpChnParam.stChnSrcParam.stCropWin.u16Height = VEDIO_HEIGHT;
 
     stHvpChnParam.stChnDstParam.bFlip = 0;
     stHvpChnParam.stChnDstParam.bMirror = 0;
@@ -3025,14 +3231,14 @@ static MI_S32 sstar_hvp_init()
     stHvpChnParam.stChnDstParam.u16Fpsx100 = 60;
     stHvpChnParam.stChnDstParam.u16Width = VEDIO_WIDTH;
     stHvpChnParam.stChnDstParam.u16Height = VEDIO_HEIGHT;
-    stHvpChnParam.stChnDstParam.stDispWin.u16X = 0;
-    stHvpChnParam.stChnDstParam.stDispWin.u16Y = 0;
-    stHvpChnParam.stChnDstParam.stDispWin.u16Width = VEDIO_WIDTH;
-    stHvpChnParam.stChnDstParam.stDispWin.u16Height = VEDIO_HEIGHT;
+    //stHvpChnParam.stChnDstParam.stDispWin.u16X = 0;
+    //stHvpChnParam.stChnDstParam.stDispWin.u16Y = 0;
+    //stHvpChnParam.stChnDstParam.stDispWin.u16Width = VEDIO_WIDTH;
+    //stHvpChnParam.stChnDstParam.stDispWin.u16Height = VEDIO_HEIGHT;
     stHvpChnParam.stChnDstParam.stCropWin.u16X = 0;
     stHvpChnParam.stChnDstParam.stCropWin.u16Y = 0;
-    stHvpChnParam.stChnDstParam.stCropWin.u16Width = VEDIO_WIDTH;
-    stHvpChnParam.stChnDstParam.stCropWin.u16Height = VEDIO_HEIGHT;
+    //stHvpChnParam.stChnDstParam.stCropWin.u16Width = VEDIO_WIDTH;
+    //stHvpChnParam.stChnDstParam.stCropWin.u16Height = VEDIO_HEIGHT;
     ret = MI_HVP_SetChannelParam(u32HvpDevId, u32HvpChnId, &stHvpChnParam);
     if (MI_SUCCESS != ret)
     {
@@ -3251,6 +3457,13 @@ static MI_S32 sstar_BaseModule_Init()
         sstar_MediaPipeLine_Creat();
         //File -> FFMPEG -> SCL
     }
+    else if (g_u8PipelineMode == 2)
+    {
+        sstar_MediaList_Init();
+        sstar_SnrPipeLine_Creat(0, g_InputFile);
+        g_bThreadExitReceive = true;
+        pthread_create(&g_pThreadSnrReceive, NULL, sstar_SensorFrame_Receive, NULL);
+    }
 
     pthread_create(&g_pThreadUpdatePoint, NULL, sstar_PointOffsetMoniter_Thread, NULL);
     pthread_create(&g_pThreadCommit,      NULL, sstar_DrmCommit_Thread, NULL);
@@ -3290,7 +3503,17 @@ static MI_S32 sstar_BaseModule_DeInit()
     else if (g_u8PipelineMode == 1)
     {
         sstar_MediaPipeLine_Destroy();
-        //File -> FFMPEG -> GPU -> Drm
+    }
+    else if (g_u8PipelineMode == 2)
+    {
+        if(g_pThreadSnrReceive)
+        {
+            g_bThreadExitReceive = false;
+            pthread_join(g_pThreadSnrReceive, NULL);
+            g_pThreadSnrReceive = NULL;
+        }
+        sstar_SnrPipeLine_Destory(0);
+        sstar_MediaList_DeInit();
     }
 
     STCHECKRESULT(MI_SYS_Exit(0));
@@ -3315,24 +3538,20 @@ MI_S32 parse_args(int argc, char **argv)
         if (0 == strcmp(argv[i], "-m"))
         {
             g_u8PipelineMode = atoi(argv[i+1]);
-            if((g_u8PipelineMode != 0) && (g_u8PipelineMode != 1))
+            if((g_u8PipelineMode != 0) && (g_u8PipelineMode != 1) && (g_u8PipelineMode != 2))
             {
-                printf("<error>[-m]:Only supports mode0 and mode 1\n");
+                printf("<error>[-m]:Only supports mode0 ~ mode3\n");
                 return -1;
             }
         }
         if (0 == strcmp(argv[i], "-i"))
         {
-            strcpy(g_InputFile, argv[i + 1]);
-            if(g_u8PipelineMode != 1)
+            g_InputFile = (char*)malloc(128);
+            if(g_InputFile != NULL)
             {
-                printf("<error>[-i]:Only mode 1 requires inputting the corresponding video file\n");
-                return -1;
+                strcpy(g_InputFile, argv[i + 1]);
             }
-            else
-            {
-                bInputVedioFile = true;
-            }
+            bInputVedioFile = true;
         }
         if (0 == strcmp(argv[i], "-l"))
         {
@@ -3350,7 +3569,7 @@ MI_S32 parse_args(int argc, char **argv)
             //_g_MediaPlayer.rotate  = atoi(argv[i+1]);
             _g_MediaPlayer.video_info.rotate = _g_rotate_mode;
 
-            if(_g_MediaPlayer.video_info.rotate > 3)
+            if(_g_rotate_mode > 3)
             {
                 printf("<error>[-r]:Only supports 0-3\n");
 
@@ -3619,12 +3838,28 @@ void sstar_CmdParse_Pause(void)
                     if(g_u8PipelineMode == 0)
                     {
                         sstar_HdmiPipeLine_Destory();
-                        g_u8PipelineMode = 1;
+                        g_u8PipelineMode ++;
                         sstar_MediaPipeLine_Creat();
                     }
-                    else
+                    else if(g_u8PipelineMode == 1)
                     {
                         sstar_MediaPipeLine_Destroy();
+                        g_u8PipelineMode ++;
+                        sstar_MediaList_Init();
+                        sstar_SnrPipeLine_Creat(0, NULL);
+                        g_bThreadExitReceive = true;
+                        pthread_create(&g_pThreadSnrReceive, NULL, sstar_SensorFrame_Receive, NULL);
+                    }
+                    else if(g_u8PipelineMode == 2)
+                    {
+                        if(g_pThreadSnrReceive)
+                        {
+                            g_bThreadExitReceive = false;
+                            pthread_join(g_pThreadSnrReceive, NULL);
+                            g_pThreadSnrReceive = NULL;
+                        }
+                        sstar_SnrPipeLine_Destory(0);
+                        sstar_MediaList_DeInit();
                         g_u8PipelineMode = 0;
                         sstar_HdmiPipeLine_Creat();
                     }
@@ -3639,7 +3874,6 @@ void sstar_CmdParse_Pause(void)
         continue;
     }
 }
-
 
 
 MI_S32 main(int argc, char **argv)
