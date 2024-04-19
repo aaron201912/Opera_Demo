@@ -2259,6 +2259,7 @@ static int sstar_draw_canvas(plane_info_t osdInfo)
     dstFillInfo.color = 0x00000000;
     g_stdOsdGpuRender->fill(_g_MainCanvas.mainFbCanvas, dstFillInfo);
 
+    bitblitinfo.transfrom = NONE;
     memcpy(&bitblitinfo.srcRect, &srcFillInfo.rect, sizeof(Rect));
     bitblitinfo.dstRect.left = 0;
     bitblitinfo.dstRect.top = 0;
@@ -2670,8 +2671,6 @@ void *sstar_HdmiRxProcess_Thread(void * param)
     g_RectDisplayRegion[1].right = g_stDrmCfg.width;
     g_RectDisplayRegion[1].bottom = g_stDrmCfg.height;
 
-    //g_stdHdmiRxGpuGfx = sstar_gpugfx_context_init(u32Width, u32Height, u32GpuInputFormat, false);
-
     struct timeval tv;
     MI_S32 s32FdSclPort0 = -1;
     fd_set ReadFdsSclPort0;
@@ -2790,7 +2789,6 @@ void *sstar_HdmiRxProcess_Thread(void * param)
             }
             else
             {
-                //printf("g_HeadListVideoOutput.queue_list list is empty\n");
                 if(!_g_HdmiRxPlayer.pbConnected)
                 {
                     sstar_clear_plane(MOPG_ID0);
@@ -2802,8 +2800,16 @@ void *sstar_HdmiRxProcess_Thread(void * param)
         }
     }
     sstar_clear_plane(MOPG_ID0);
-    g_stdHdmiRxGpuGfx->deinit();
-    g_stdHdmiRxGpuGfx = NULL;
+    if(g_stdHdmiRxGpuGfx)
+    {
+        g_stdHdmiRxGpuGfx->deinit();
+        g_stdHdmiRxGpuGfx = NULL;
+    }
+    if(g_stdGfxGpuRender)
+    {
+        g_stdGfxGpuRender->deinit();
+        g_stdGfxGpuRender = NULL;
+    }
     MI_SYS_CloseFd(s32FdSclPort0);
     FD_ZERO(&ReadFdsSclPort0);
 
