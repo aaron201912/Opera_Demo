@@ -1052,8 +1052,10 @@ static int atomic_set_plane(unsigned int *fb_id, unsigned int *plane_clear, unsi
     }
     else if(plane_clear[0] == 1)
     {
+
         add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].FB_ID, 0);
         add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_ID, 0);
+        plane_clear[0] = 0;  //clear once
     }
 
 
@@ -1072,8 +1074,9 @@ static int atomic_set_plane(unsigned int *fb_id, unsigned int *plane_clear, unsi
     {
         add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].FB_ID, 0);
         add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_ID, 0);
+        printf("atomic_set_plane clean mop \n");
+        plane_clear[1] = 0;  //clear once
     }
-
     drmModeAtomicAddProperty(req, g_stDrmCfg.crtc_id, g_stDrmCfg.drm_mode_prop_ids[0].FENCE_ID, (uint64_t)&g_stDrmCfg.out_fence);//use this flag,must be close out_fence
 
     ret = drmModeAtomicCommit(g_stDrmCfg.fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_ATOMIC_NONBLOCK , NULL);
@@ -1617,6 +1620,7 @@ static void sstar_MediaList_DeInit() //for video
     pthread_mutex_lock(&g_stDrmCfg.commit_Mutex);
     printf("sstar_MediaList_DeInits\n");
     clean_list_node(&g_HeadListVideoOutput);
+    clean_list_node(&g_HeadListVideoCommit);
     for(int i = 0; i < BUF_DEPTH  ; i++)
     {
         if(_g_VideoListEntryNode[i])
@@ -1707,7 +1711,9 @@ static void sstar_HdmiList_DeInit() //for video
         printf("sstar_HdmiList_DeInit 1 time=%lu \n",(eTime2 - eTime1));
     }
 
+    clean_list_node(&g_HeadListVideoCommit);
     clean_list_node(&g_HeadListVideoOutput);
+    clean_list_node(&g_HeadListGpuGfxInput);
     clean_list_node(&g_HeadListSclOutput);
     for(int i = 0; i < BUF_DEPTH  ; i++)
     {
@@ -2148,7 +2154,7 @@ void *sstar_DrmCommit_Thread(void * arg)
                 {
                      //clear osd plane
                      osd_drm_buf.fb_id = 0;
-                     g_stDrmCfg.fb_id[0] = 0;
+                     g_stDrmCfg.fb_id[0] = osd_drm_buf.fb_id;
                      g_stDrmCfg.planeNeedClean[0] = 1;
 
                      delete ListOsdCommit;
@@ -2157,6 +2163,12 @@ void *sstar_DrmCommit_Thread(void * arg)
                 }
             }
         }
+        else
+        {
+            osd_drm_buf.fb_id = 0;
+            g_stDrmCfg.fb_id[0] = osd_drm_buf.fb_id;
+        }
+
         if(_g_HdmiRxPlayer.pIsCreated || _g_MediaPlayer.pIsCreated)
         {
             ListVideoCommit = get_first_node(&g_HeadListVideoCommit);
@@ -2184,7 +2196,8 @@ void *sstar_DrmCommit_Thread(void * arg)
                 else
                 {
                     //clear video plane
-                    g_stDrmCfg.fb_id[1] = 0;
+                    video_drm_buf.fb_id = 0;
+                    g_stDrmCfg.fb_id[1] = video_drm_buf.fb_id;
                     g_stDrmCfg.planeNeedClean[1] = 1;
 
                     delete ListVideoCommit;
@@ -2192,6 +2205,11 @@ void *sstar_DrmCommit_Thread(void * arg)
                     printf("clear mop to black now \n");
                 }
             }
+        }
+        else
+        {
+            video_drm_buf.fb_id = 0;
+            g_stDrmCfg.fb_id[1] = video_drm_buf.fb_id;
         }
 
         if((!_g_MainCanvas.pIsCreated && !_g_HdmiRxPlayer.pIsCreated && !_g_MediaPlayer.pIsCreated) ||
@@ -2205,18 +2223,24 @@ void *sstar_DrmCommit_Thread(void * arg)
         {
             atomic_set_plane(g_stDrmCfg.fb_id, g_stDrmCfg.planeNeedClean, g_stDrmCfg.planeNeedUpdate);
 
-            if((prev_mop_gem_handle.first != video_drm_buf.fb_id) && (video_drm_buf.fb_id > 0))
+            if((prev_mop_gem_handle.first != video_drm_buf.fb_id))
             {
-                sstar_put_videobuf(ListVideoCommit);
-                add_tail_node(&g_HeadListVideoOutput, &ListVideoCommit->list);
+                if((video_drm_buf.fb_id > 0))
+                {
+                    sstar_put_videobuf(ListVideoCommit);
+                    add_tail_node(&g_HeadListVideoOutput, &ListVideoCommit->list);
+                }
 
                 drm_free_gem_handle(&prev_mop_gem_handle);
                 prev_mop_gem_handle.first = video_drm_buf.fb_id;
                 prev_mop_gem_handle.second = video_drm_buf.gem_handle[0];
             }
-            if((prev_gop_gem_handle.first != osd_drm_buf.fb_id) && (osd_drm_buf.fb_id > 0))
+            if((prev_gop_gem_handle.first != osd_drm_buf.fb_id))
             {
-                add_tail_node(&g_HeadListOsdOutput, &ListOsdCommit->list);
+                if((osd_drm_buf.fb_id > 0))
+                {
+                    add_tail_node(&g_HeadListOsdOutput, &ListOsdCommit->list);
+                }
                 drm_free_gem_handle(&prev_gop_gem_handle);
                 prev_gop_gem_handle.first = osd_drm_buf.fb_id;
                 prev_gop_gem_handle.second = osd_drm_buf.gem_handle[0];
@@ -2425,7 +2449,7 @@ void* sstar_HdmiPlugsDetect_Thread(void * arg)
         FD_ZERO(&set);
         FD_SET(s32HDMIRxFd , &set);
         tv.tv_sec = 0;
-        tv.tv_usec = 500 * 1000;
+        tv.tv_usec = 100 * 1000;
         ret = select(s32HDMIRxFd+1, &set, NULL, NULL, &tv);
         if(ret < 0 )
         {
@@ -2464,6 +2488,7 @@ void* sstar_HdmiPlugsDetect_Thread(void * arg)
                         printf("Get Hdmirx Timing error!\n");
                         break;
                     }
+                    _g_HdmiRxPlayer.player_working = true;
                     _g_HdmiRxPlayer.pIsCleaned = false;
                 }
                 while(_g_HdmiRxPlayer.eSignalStatus != E_MI_HDMIRX_SIG_SUPPORT && hvp_event_thread_running)
@@ -2484,6 +2509,7 @@ void* sstar_HdmiPlugsDetect_Thread(void * arg)
                             printf("Get Hdmirx Timing error!\n");
                             break;
                         }
+                        _g_HdmiRxPlayer.player_working = true;
                         _g_HdmiRxPlayer.pIsCleaned = false;
                     }
                     else
@@ -2565,7 +2591,7 @@ void* sstar_HvpEventMoniter_Thread(void * arg)
         FD_ZERO(&read_fds);
         FD_SET(s32Fd, &read_fds);
         tv.tv_sec = 0;
-        tv.tv_usec = 500 * 1000;
+        tv.tv_usec = 100 * 1000;
         ret = select(s32Fd + 1, &read_fds, NULL, NULL, &tv);
         if (ret < 0)
         {
@@ -2584,7 +2610,6 @@ void* sstar_HvpEventMoniter_Thread(void * arg)
             printf("MI_HVP_GetSourceSignalStatus, hvp=%d!\n", dev);
 
         }
-
         while(_g_HdmiRxPlayer.pbConnected && _g_HdmiRxPlayer.eSignalStatus == E_MI_HDMIRX_SIG_SUPPORT
                 && _g_HdmiRxPlayer.eHvpSignalStatus != E_MI_HVP_SIGNAL_STABLE && hvp_event_thread_running)
         {
@@ -2733,14 +2758,13 @@ void *sstar_HdmiRxProcess_Thread(void * param)
         printf("GET scl Fd Failed , scl Chn = %d\n", stSclChnPort0.u32ChnId);
         return NULL;
     }
-
     sstar_clear_plane(MOPG_ID0);
     while(g_bThreadExitHdmi == TRUE)
     {
         FD_ZERO(&ReadFdsSclPort0);
         FD_SET(s32FdSclPort0, &ReadFdsSclPort0);
         tv.tv_sec = 0;
-        tv.tv_usec = 500 * 1000;
+        tv.tv_usec = 100 * 1000;
         s32Ret = select(s32FdSclPort0 + 1, &ReadFdsSclPort0, NULL, NULL, &tv);
         if (s32Ret < 0)
         {
@@ -2750,7 +2774,7 @@ void *sstar_HdmiRxProcess_Thread(void * param)
         }
         else if (0 == s32Ret)
         {
-            printf("scl select timeout\n");
+            //printf("scl select timeout\n");
             continue;
         }
         else
@@ -2844,7 +2868,7 @@ void *sstar_HdmiRxProcess_Thread(void * param)
             {
                 if(!_g_HdmiRxPlayer.pbConnected)
                 {
-                    sstar_clear_plane(MOPG_ID0);
+                    //sstar_clear_plane(MOPG_ID0);
                 }
                 add_tail_node(&g_HeadListSclOutput, &GfxReadListNode->list);
                 usleep(5 * 1000);
@@ -2888,6 +2912,7 @@ void *sstar_VideoProcess_Thread(void * arg)
     uint32_t u32GpuInputFormat = DRM_FORMAT_NV12;
 
     sstar_clear_plane(MOPG_ID0);
+
     while(g_bThreadExitGfx)
     {
 
@@ -3322,8 +3347,8 @@ static MI_S32 sstar_hdmirx_init()
     }
     else
     {
-        printf("MI HdmiRx Connect fail\n");
-        sstar_clear_plane(MOPG_ID0);
+        printf("MI HdmiRx not Connect\n");
+        //sstar_clear_plane(MOPG_ID0);
     }
 
 
@@ -3485,7 +3510,7 @@ static MI_S32 sstar_HdmiPipeLine_Creat()
         printf("sstar_hdmirx_init error: %d\n", ret);
         return ret;
     }
-
+    _g_HdmiRxPlayer.pIsCreated = true;
     pthread_create(&hdmi_detect_thread, NULL, sstar_HdmiPlugsDetect_Thread, NULL);
     pthread_create(&hvp_event_thread, NULL, sstar_HvpEventMoniter_Thread, NULL);
 
@@ -3495,7 +3520,6 @@ static MI_S32 sstar_HdmiPipeLine_Creat()
         return ret;
     }
 
-    _g_HdmiRxPlayer.pIsCreated = true;
     STCHECKRESULT(MI_SYS_BindChnPort2(0, &_g_HdmiRxPlayer.stHvpChnPort, &_g_HdmiRxPlayer.stSclChnPort, _g_HdmiRxPlayer.hvpFrameRate, _g_HdmiRxPlayer.sclFrameRate, _g_HdmiRxPlayer.eBindType, 0));
     pthread_create(&g_pThreadScl,  NULL, sstar_SclEnqueue_thread, &_g_HdmiRxPlayer.stSclChnPort);
     pthread_create(&g_pThreadHdmi, NULL, sstar_HdmiRxProcess_Thread, &_g_HdmiRxPlayer.stSclChnPort);
