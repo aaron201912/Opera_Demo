@@ -41,6 +41,7 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/prctl.h>
+#include <inttypes.h>
 
 #include <cstring>
 
@@ -60,6 +61,7 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 #include "sstar_drm.h"
 
 #include "sstar_sensor_demo.h"
+#include "hdmi_player.h"
 
 #define VEDIO_WIDTH     1920
 #define VEDIO_HEIGHT    1080
@@ -406,6 +408,9 @@ pthread_t g_pThreadAudio;
 
 pthread_t g_pThreadHdmi;
 MI_BOOL g_bThreadExitHdmi = TRUE;
+
+pthread_t g_pThreadHdmiAudio;
+MI_BOOL g_bThreadExitHdmiAudio = TRUE;
 
 
 pthread_t g_pThreadUiDrm;
@@ -3043,51 +3048,6 @@ void *sstar_VideoProcess_Thread(void * arg)
     return NULL;
 }
 
-#if 0
-void *sstar_AudioProcess_Thread(void * arg)
-{
-
-    while(g_bThreadExitCommit)
-    {
-        if(g_u8PipelineMode == 0)
-        {
-            sstar_HdmiPipeLine_Destory();
-            g_u8PipelineMode = 1;
-            sstar_MediaPipeLine_Creat();
-        }
-        else if(g_u8PipelineMode == 1)
-        {
-            sstar_MediaPipeLine_Destroy();
-            g_u8PipelineMode = 0;
-            sstar_HdmiPipeLine_Creat();
-        }
-    }
-#if 0
-    int ret;
-    frame_info_t frame_info;
-    while(g_bThreadExitGfx)
-    {
-        ret = mm_player_get_audio_frame(&frame_info);
-        if(ret < 0)
-        {
-            printf("mm_player_get_audio_frame fail\n");
-            usleep(3 * 1000);
-        }
-        else
-        {
-            //printf("mm_player_get_audio_frame success,size=%lld sample_rate=%d channel_layout=%d channels=%d format=%d\n",
-            //    frame_info.size, frame_info.sample_rate, frame_info.channel_layout, frame_info.channels, frame_info.format );
-
-            mm_player_write_audio_frame(frame_info.extended_data, (int)frame_info.size);
-            mm_player_put_audio_frame(&frame_info);
-        }
-
-    }
-#endif
-    printf("sstar_AudioProcess_Thread exit\n");
-}
-#endif
-
 static void *sstar_PlayerMoniter_Thread(void *args)
 {
     int ret;
@@ -3233,51 +3193,9 @@ static void *sstar_SensorFrame_Receive(void *param)
     return NULL;
 }
 
-void *sstar_AudioProcess_Thread(void * arg)
+void *sstar_Media_AudioProcess_Thread(void * arg)
 {
-#if 0
 
-    unsigned long eTime1;
-    unsigned long eTime2;
-    unsigned long eTime3;
-    struct timeval timeEnqueue1;
-
-    while(g_bThreadExitCommit)
-    {
-        if(g_u8PipelineMode == 0)
-        {
-            gettimeofday(&timeEnqueue1, NULL);
-            eTime1 = timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
-
-            sstar_HdmiPipeLine_Destory();
-
-            gettimeofday(&timeEnqueue1, NULL);
-            eTime2 = timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
-            //if((eTime2 - eTime1) > 16 )
-            {
-                printf("sstar_HdmiPipeLine_Destory time=%d \n",(eTime2 - eTime1));
-            }
-            g_u8PipelineMode = 1;
-            sstar_MediaPipeLine_Creat();
-        }
-        else if(g_u8PipelineMode == 1)
-        {
-            gettimeofday(&timeEnqueue1, NULL);
-            eTime1 = timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
-
-            sstar_MediaPipeLine_Destroy();
-            gettimeofday(&timeEnqueue1, NULL);
-            eTime2 = timeEnqueue1.tv_sec*1000 + timeEnqueue1.tv_usec/1000;
-            //if((eTime2 - eTime1) > 16 )
-            {
-                printf("sstar_MediaPipeLine_Destroy time=%d \n",(eTime2 - eTime1));
-            }
-            g_u8PipelineMode = 0;
-            sstar_HdmiPipeLine_Creat();
-        }
-        usleep(3 * 1000 * 1000);
-    }
-#else
     int ret;
     frame_info_t frame_info;
     while(g_bThreadExitGfx)
@@ -3298,11 +3216,48 @@ void *sstar_AudioProcess_Thread(void * arg)
         }
 
     }
-#endif
-    printf("sstar_AudioProcess_Thread exit\n");
+
+    printf("sstar_Media_AudioProcess_Thread exit\n");
     return NULL;
 }
 
+void *sstar_HDMI_AudioProcess_Thread(void * arg)
+{
+    int ret;
+    hdmi_player_audio_frame_t *frame = NULL;
+    prctl(PR_SET_NAME, "sstar_HDMI_AudioProcess_Thread");
+    printf("%s thread_id: %llx\n", __FUNCTION__, (uint64_t)pthread_self());
+    while(g_bThreadExitHdmiAudio == true)
+    {
+        ret = hdmi_player_get_pcm(&frame);
+        if (0 != ret) {
+            printf("%s hdmi_player_get_pcm failed\n", __FUNCTION__);
+            break;
+        }
+        if (!frame) {
+            printf("%s frame is null\n", __FUNCTION__);
+            continue;
+        }
+
+        //printf("%s data:%p size:%d channels:%d sample_rate:%d pts:%lld\n", __FUNCTION__, frame->data, frame->size, frame->channels, frame->sample_rate, frame->pts);
+
+        ret = hdmi_player_write_pcm(frame);
+        if (0 != ret) {
+            printf("%s hdmi_player_write_pcm failed\n", __FUNCTION__);
+            break;
+        }
+
+        ret = hdmi_player_put_pcm(frame);
+        if (0 != ret) {
+            printf("%s hdmi_player_put_pcm failed\n", __FUNCTION__);
+            break;
+        }
+
+    }
+
+    printf("sstar_HDMI_AudioProcess_Thread exit\n");
+    return NULL;
+}
 
 static MI_S32 sstar_hdmirx_init()
 {
@@ -3483,12 +3438,41 @@ static MI_S32 sstar_hvp_deinit()
     return MI_SUCCESS;
 }
 
+
+static void hdmi_player_event_cb(hdmi_player_event_e event)
+{
+    printf("%s: event:%d\n", __FUNCTION__, event);
+}
+
+void hdmi_player_video_frame_drop_cb(hdmi_player_video_frame_t frame)
+{
+    if (!frame.buf_handle) {
+        printf("%s: frame buf_handle:%p pts:%" PRIi64 "\n", __FUNCTION__, frame.buf_handle, frame.pts);
+        return;
+    }
+    //St_ListNode_t *ListVideoOutput = (St_ListNode_t *)frame.buf_handle;
+    //add_tail_node(&g_HeadListVideoOutput, &ListVideoOutput->list);
+    printf("%s: frame buf_handle:%p pts:%" PRIi64 "\n", __FUNCTION__, frame.buf_handle, frame.pts);
+}
+
+void hdmi_player_video_frame_flip_cb(hdmi_player_video_frame_t frame)
+{
+    if (!frame.buf_handle) {
+        printf("%s: frame buf_handle:%p pts:%" PRIi64 "\n", __FUNCTION__, frame.buf_handle, frame.pts);
+        return;
+    }
+    //St_ListNode_t *ListVideoOutput = (St_ListNode_t *)frame.buf_handle;
+    //add_tail_node(&g_HeadListVideoCommit, &ListVideoOutput->list);
+    //printf("%s: frame buf_handle:%p pts:%" PRIi64 "\n", __FUNCTION__, frame.buf_handle, frame.pts);
+}
+
 static MI_S32 sstar_HdmiPipeLine_Creat()
 {
     MI_S32 ret = MI_SUCCESS;
 
     g_bThreadExitHdmi = true;
     g_bThreadExitScl = true;
+    g_bThreadExitHdmiAudio = true;
     hvp_event_thread_running = true;
 
     ret = sstar_HdmiList_Init();
@@ -3520,21 +3504,47 @@ static MI_S32 sstar_HdmiPipeLine_Creat()
         return ret;
     }
 
+    hdmi_player_config_t hdmi_cfg;
+    hdmi_cfg.event_cb = hdmi_player_event_cb;
+    hdmi_cfg.ao_dev = E_HDMI_PLAYER_AO_DEV_SPEAKER;
+    hdmi_cfg.ao_format = E_HDMI_PLAYER_AO_FORMAT_PCM;
+    hdmi_cfg.game_mode = false;
+    hdmi_cfg.mute = false;
+    hdmi_cfg.volume = 60;
+    hdmi_cfg.ai_sample_rate = E_HDMI_PLAYER_AIO_SAMPLE_RATE_ORIGINAL;
+    hdmi_cfg.ao_sample_rate = E_HDMI_PLAYER_AIO_SAMPLE_RATE_ORIGINAL;
+    hdmi_cfg.drm_info.fd = g_stDrmCfg.fd;
+    hdmi_cfg.drm_info.panel_refresh_rate = g_stDrmCfg.Connector->modes->vrefresh;
+    hdmi_cfg.video_frame_drop_cb = hdmi_player_video_frame_drop_cb;
+    hdmi_cfg.video_frame_flip_cb = hdmi_player_video_frame_flip_cb;
+    ret = hdmi_player_open(hdmi_cfg);
+    if (ret < 0)
+    {
+        printf("hdmi_player_open error: %d\n", ret);
+        return ret;
+    }
     STCHECKRESULT(MI_SYS_BindChnPort2(0, &_g_HdmiRxPlayer.stHvpChnPort, &_g_HdmiRxPlayer.stSclChnPort, _g_HdmiRxPlayer.hvpFrameRate, _g_HdmiRxPlayer.sclFrameRate, _g_HdmiRxPlayer.eBindType, 0));
     pthread_create(&g_pThreadScl,  NULL, sstar_SclEnqueue_thread, &_g_HdmiRxPlayer.stSclChnPort);
     pthread_create(&g_pThreadHdmi, NULL, sstar_HdmiRxProcess_Thread, &_g_HdmiRxPlayer.stSclChnPort);
+    pthread_create(&g_pThreadHdmiAudio, NULL, sstar_HDMI_AudioProcess_Thread, NULL);
 
     return MI_SUCCESS;
 }
 
 static MI_S32 sstar_HdmiPipeLine_Destory()
 {
-
     _g_HdmiRxPlayer.player_working = false;
     _g_HdmiRxPlayer.pIsCreated = false;
+    g_bThreadExitHdmiAudio = false;
     g_bThreadExitHdmi = false;
     g_bThreadExitScl = false;
     hvp_event_thread_running = false;
+
+    if(g_pThreadHdmiAudio)//hdmi or video
+    {
+        pthread_join(g_pThreadHdmiAudio, NULL);
+        g_pThreadHdmiAudio = NULL;
+    }
 
     if(g_pThreadHdmi)//hdmi or video
     {
@@ -3561,6 +3571,8 @@ static MI_S32 sstar_HdmiPipeLine_Destory()
         pthread_join(hdmi_detect_thread, NULL);
         hdmi_detect_thread = NULL;
     }
+
+    hdmi_player_close();
 
     /************************************************
     step :unbind HVP -> SCL
@@ -3613,7 +3625,7 @@ static MI_S32 sstar_MediaPipeLine_Creat()
     _g_MediaPlayer.pIsCreated = true;
     pthread_create(&g_player_thread, NULL, sstar_PlayerMoniter_Thread, NULL);
     pthread_create(&g_pThreadGfx, NULL, sstar_VideoProcess_Thread, NULL);
-    pthread_create(&g_pThreadAudio, NULL, sstar_AudioProcess_Thread, NULL);
+    pthread_create(&g_pThreadAudio, NULL, sstar_Media_AudioProcess_Thread, NULL);
 
     return MI_SUCCESS;
 }
@@ -4045,7 +4057,6 @@ void sstar_CmdParse_Pause(void)
                 break;
             case 's'://Change Source
                 {
-                    //pthread_create(&g_pThreadAudio, NULL, sstar_AudioProcess_Thread, NULL);
                     if(g_u8PipelineMode == 0)
                     {
                         sstar_HdmiPipeLine_Destory();

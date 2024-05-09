@@ -16,7 +16,7 @@ COM_FLAGS = -Wall -g -fPIC -DGL_GLEXT_PROTOTYPES -DEGL_EGLEXT_PROTOTYPES -DEGL_D
 C_FLAGS  = $(COM_FLAGS) -std=gnu11
 CPP_FLAGS  = $(COM_FLAGS) -std=gnu++11
 
-INCLUDES := -I./inc -I./inc/drm -I./inc/include
+INCLUDES := -I./inc -I./inc/drm -I./inc/include -I./inc/public
 INCLUDES += -I$(ALKAID_PATH)/release/include
 
 
@@ -52,7 +52,7 @@ LIBS += -L$(ALKAID_PATH)/release/chip/p5/dispcam/common/glibc/6.4.0/3rd_party_li
 LIBS += -lmali -lEGL -lGLESv1_CM -lGLESv2
 
 LIBS += -L./lib
-LIBS += -lgpugfx
+LIBS += -lgpugfx -lhdmiplayer
 LIBS += -ldrm
 
 
