@@ -131,9 +131,12 @@ typedef struct convans_obj_s {
 
 
 convans_contex_t _g_MainCanvas;
+convans_contex_t _g_MainSorCanvas;
+std::shared_ptr<GpuGraphicBuffer> g_cursor_canvas;
 
 std::shared_ptr<GpuGraphicBuffer> g_MainFbCanvas;
 pthread_mutex_t g_MainFbCanvas_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t g_cursor_canvas_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 static media_player_t _g_MediaPlayer;
@@ -276,6 +279,23 @@ typedef enum
     E_STREAM_MAX = E_MI_SYS_PIXEL_FRAME_FORMAT_MAX,
 } E_VIDEO_RAW_FORMAT;
 
+unsigned long long getOsTime(void)
+{
+    unsigned long long u64CurTime = 0;
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    u64CurTime = ((unsigned long long)(tv.tv_sec))*1000 + tv.tv_usec/1000;
+    return u64CurTime;
+}
+unsigned long long cursor_time = 0;
+unsigned int cursor_x_size = 320;
+unsigned int cursor_y_size = 240;
+
+unsigned int g_tmp_x = 0;
+unsigned int g_tmp_y = 0;
+
+
 struct buffer_object {
     uint32_t width;
     uint32_t height;
@@ -339,15 +359,16 @@ typedef struct DrmModeConfiction_s
     unsigned int crtc_id;
     unsigned int has_modifiers;
     unsigned int osd_commited;
+    unsigned int sor_commited;
     unsigned int mop_commited;
     unsigned int conn_id;
     unsigned int width;
     unsigned int height;
     unsigned int blob_id;
-    unsigned int fb_id[2];//0 for GOP;1 for mop
-    unsigned int planeNeedUpdate[2];//0 for GOP;1 for mop
-    unsigned int planeNeedClean[2];//0 for GOP;1 for mop
-    drm_property_ids_t drm_mode_prop_ids[2];//0 for GOP;1 for mop
+    unsigned int fb_id[3];//0 for GOP;1 for mop
+    unsigned int planeNeedUpdate[3];//0 for GOP;1 for mop
+    unsigned int planeNeedClean[3];//0 for GOP;1 for mop
+    drm_property_ids_t drm_mode_prop_ids[3];//0 for GOP;1 for mop
     drmModeRes *pDrmModeRes;
     pthread_mutex_t commit_Mutex;
     drmModeConnectorPtr Connector;
@@ -375,6 +396,7 @@ St_ListNode_t *_g_GfxInputEntryNode[BUF_DEPTH];
 static int  _g_rotate_mode  = (int)AV_ROTATE_NONE;
 static plane_info_t g_CurVideoInfo;
 static plane_info_t g_CurOsdInfo;
+static plane_info_t g_CurSorInfo;
 
 MI_U32 g_u32UiWidth = 0;
 MI_U32 g_u32UiHeight = 0;
@@ -416,6 +438,9 @@ MI_BOOL g_bThreadExitHdmiAudio = TRUE;
 pthread_t g_pThreadUiDrm;
 MI_BOOL g_bThreadExitUiDrm = TRUE;
 
+pthread_t g_pThreadCursorDrm;
+MI_BOOL g_bThreadExitCursorDrm = TRUE;
+
 pthread_t g_pThreadCommit;
 MI_BOOL g_bThreadExitCommit = TRUE;
 
@@ -435,6 +460,7 @@ MI_U32 g_u32GpuRB_X, g_u32GpuRB_Y;
 
 MI_BOOL g_bGpuProcessNeed = false;
 pthread_mutex_t g_OsdProcessMutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t g_SorProcessMutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t g_VideoProcessMutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t g_HdmiRXProcessMutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -443,10 +469,15 @@ MI_BOOL g_bChangePointOffset = false;
 
 std::pair<uint32_t, uint32_t> prev_gop_gem_handle(static_cast<uint32_t>(0), static_cast<uint32_t>(0));
 std::pair<uint32_t, uint32_t> prev_mop_gem_handle(static_cast<uint32_t>(0), static_cast<uint32_t>(0));
+std::pair<uint32_t, uint32_t> prev_sor_gem_handle(static_cast<uint32_t>(0), static_cast<uint32_t>(0));
 
 
 std::shared_ptr<GpuGraphicEffect> g_stdOsdGpuGfx = NULL;
 std::shared_ptr<GpuGraphicRender> g_stdOsdGpuRender = NULL;
+
+std::shared_ptr<GpuGraphicEffect> g_stdSorGpuGfx = NULL;
+std::shared_ptr<GpuGraphicRender> g_stdSorGpuRender = NULL;
+
 
 std::shared_ptr<GpuGraphicEffect> g_stdVideoGpuGfx = NULL;
 std::shared_ptr<GpuGraphicEffect> g_stdHdmiRxGpuGfx = NULL;
@@ -471,11 +502,15 @@ St_List_t g_HeadListGpuGfxInput;
 St_List_t g_HeadListOsdOutput;
 St_List_t g_HeadListOsdCommit;
 
+St_List_t g_HeadListCursorOutput;
+St_List_t g_HeadListCursorCommit;
+
 St_List_t g_HeadListVideoOutput;
 St_List_t g_HeadListVideoCommit;
 
 std::shared_ptr<GpuGraphicBuffer> g_OsdOutputBuffer[BUF_DEPTH];
 static St_ListNode_t *_g_OsdListEntryNode[BUF_DEPTH];
+static St_ListNode_t *_g_CursorListEntryNode[BUF_DEPTH];
 
 static St_ListNode_t *_g_VideoListEntryNode[BUF_DEPTH];
 
@@ -1019,6 +1054,17 @@ static void update_palne_dispinfo(drmModeAtomicReqPtr req, int plane_id, plane_i
         add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[1].SRC_W, (plane_info.out_width ? plane_info.out_width : g_stDrmCfg.width) << 16);
         add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[1].SRC_H, (plane_info.out_height ? plane_info.out_height : g_stDrmCfg.height) << 16);
     }
+	else if(plane_id == GOP_CURSOR_ID)
+    {
+        add_plane_property(req, GOP_CURSOR_ID, g_stDrmCfg.drm_mode_prop_ids[2].CRTC_X, plane_info.pos_x);
+        add_plane_property(req, GOP_CURSOR_ID, g_stDrmCfg.drm_mode_prop_ids[2].CRTC_Y, plane_info.pos_y);
+        add_plane_property(req, GOP_CURSOR_ID, g_stDrmCfg.drm_mode_prop_ids[2].CRTC_W, cursor_x_size);
+        add_plane_property(req, GOP_CURSOR_ID, g_stDrmCfg.drm_mode_prop_ids[2].CRTC_H, cursor_y_size);
+        add_plane_property(req, GOP_CURSOR_ID, g_stDrmCfg.drm_mode_prop_ids[2].SRC_X, 0);
+        add_plane_property(req, GOP_CURSOR_ID, g_stDrmCfg.drm_mode_prop_ids[2].SRC_Y, 0);
+        add_plane_property(req, GOP_CURSOR_ID, g_stDrmCfg.drm_mode_prop_ids[2].SRC_W, cursor_x_size << 16);
+        add_plane_property(req, GOP_CURSOR_ID, g_stDrmCfg.drm_mode_prop_ids[2].SRC_H, cursor_y_size << 16);
+    }
     else
     {
         add_plane_property(req, MOPG_ID0, g_stDrmCfg.drm_mode_prop_ids[1].CRTC_X, plane_info.pos_x);
@@ -1062,8 +1108,24 @@ static int atomic_set_plane(unsigned int *fb_id, unsigned int *plane_clear, unsi
         add_plane_property(req, GOP_UI_ID, g_stDrmCfg.drm_mode_prop_ids[0].CRTC_ID, 0);
         plane_clear[0] = 0;  //clear once
     }
+    //SOR Plane
+    if(fb_id[2] > 0)
+    {
+        add_plane_property(req, GOP_CURSOR_ID, g_stDrmCfg.drm_mode_prop_ids[2].FB_ID , fb_id[2]);
+        add_plane_property(req, GOP_CURSOR_ID, g_stDrmCfg.drm_mode_prop_ids[2].CRTC_ID, g_stDrmCfg.crtc_id);
 
-
+        if(needUpdate[2])
+        {
+            //printf("x = %d,y = %d w = %d,h = %d\n",g_CurSorInfo.pos_x,g_CurSorInfo.pos_y,g_CurSorInfo.out_width,g_CurSorInfo.out_width);
+            update_palne_dispinfo(req, GOP_CURSOR_ID, g_CurSorInfo);
+        }
+    }
+    else if(plane_clear[2] == 1)
+    {
+        add_plane_property(req, GOP_CURSOR_ID, g_stDrmCfg.drm_mode_prop_ids[2].FB_ID, 0);
+        add_plane_property(req, GOP_CURSOR_ID, g_stDrmCfg.drm_mode_prop_ids[2].CRTC_ID, 0);
+        plane_clear[2] = 0;  //clear once
+    }
     //MOP Plane
     if(fb_id[1] > 0)
     {
@@ -1414,6 +1476,7 @@ static MI_S32 sstar_init_drm()
     g_stDrmCfg.height = g_stDrmCfg.Connector->modes[0].vdisplay;
 
     init_drm_property_ids(GOP_UI_ID, &g_stDrmCfg.drm_mode_prop_ids[0]);
+    init_drm_property_ids(GOP_CURSOR_ID, &g_stDrmCfg.drm_mode_prop_ids[2]);
     init_drm_property_ids(MOPG_ID0, &g_stDrmCfg.drm_mode_prop_ids[1]);
 
     return 0;
@@ -1565,11 +1628,11 @@ static int sstar_OsdList_Init() //for osd
         _g_OsdListEntryNode[i] = new St_ListNode_t;
         if(_g_OsdListEntryNode[i] == NULL)
         {
-            printf("_g_OsdListEntryNode || _g_VideoListEntryNode malloc Error!\n");
+            printf("_g_OsdListEntryNode  malloc Error!\n");
             pthread_mutex_unlock(&g_stDrmCfg.commit_Mutex);
             return -1;
         }
-        _g_OsdListEntryNode[i]->pGraphicBuffer = g_OsdOutputBuffer[i];
+        _g_OsdListEntryNode[i]->pGraphicBuffer = NULL;
         _g_OsdListEntryNode[i]->EntryMutex = PTHREAD_MUTEX_INITIALIZER;
         add_tail_node(&g_HeadListOsdOutput, &_g_OsdListEntryNode[i]->list);
 
@@ -1578,6 +1641,52 @@ static int sstar_OsdList_Init() //for osd
     return 0;
 
 }
+
+static int sstar_CursorList_Init() //for osd
+{
+    int i = 0;
+    pthread_mutex_lock(&g_stDrmCfg.commit_Mutex);
+
+
+    init_list_head(&g_HeadListCursorOutput);
+    init_list_head(&g_HeadListCursorCommit);
+
+    for(i = 0; i < BUF_DEPTH  ; i++)
+    {
+        _g_CursorListEntryNode[i] = new St_ListNode_t;
+        if(_g_CursorListEntryNode[i] == NULL)
+        {
+            printf("_g_CursorListEntryNode  malloc Error!\n");
+            pthread_mutex_unlock(&g_stDrmCfg.commit_Mutex);
+            return -1;
+        }
+        _g_CursorListEntryNode[i]->pGraphicBuffer = NULL;
+        _g_CursorListEntryNode[i]->EntryMutex = PTHREAD_MUTEX_INITIALIZER;
+        add_tail_node(&g_HeadListCursorOutput, &_g_CursorListEntryNode[i]->list);
+
+    }
+
+    pthread_mutex_unlock(&g_stDrmCfg.commit_Mutex);
+    return 0;
+
+}
+
+static void sstar_CursorList_DeInit() //for video
+{
+    pthread_mutex_lock(&g_stDrmCfg.commit_Mutex);
+    clean_list_node(&g_HeadListCursorCommit);
+    clean_list_node(&g_HeadListCursorOutput);
+    for(int i = 0; i < BUF_DEPTH  ; i++)
+    {
+        if(_g_CursorListEntryNode[i])
+        {
+            delete _g_CursorListEntryNode[i];
+            _g_CursorListEntryNode[i] = NULL;
+        }
+    }
+    pthread_mutex_unlock(&g_stDrmCfg.commit_Mutex);
+}
+
 
 static void sstar_OsdList_DeInit() //for video
 {
@@ -1771,6 +1880,33 @@ static MI_S32 sstar_update_pointoffset()
             bUpdataGpuGfxPointFail = true;
         }
         pthread_mutex_unlock(&g_OsdProcessMutex);
+    }
+
+    if(g_stdSorGpuGfx != NULL)
+    {
+        pthread_mutex_lock(&g_SorProcessMutex);
+        //Update osd Pointoffset
+        if (!g_stdSorGpuGfx->updateLTPointOffset(g_u32GpuLT_X, g_u32GpuLT_Y))
+        {
+            printf("Failed to set osd keystone LT correction points g_u32GpuLT_X=%d g_u32GpuLT_Y=%d\n",g_u32GpuLT_X,g_u32GpuLT_Y);
+            bUpdataGpuGfxPointFail = true;
+        }
+        if (!g_stdSorGpuGfx->updateLBPointOffset(g_u32GpuLB_X, g_u32GpuLB_Y))
+        {
+            printf("Failed to set osd keystone LB correction points\n");
+            bUpdataGpuGfxPointFail = true;
+        }
+        if (!g_stdSorGpuGfx->updateRTPointOffset(g_u32GpuRT_X, g_u32GpuRT_Y))
+        {
+            printf("Failed to set osd keystone RT correction points\n");
+            bUpdataGpuGfxPointFail = true;
+        }
+        if (!g_stdSorGpuGfx->updateRBPointOffset(g_u32GpuRB_X, g_u32GpuRB_Y))
+        {
+            printf("Failed to set osd keystone RB correction points\n");
+            bUpdataGpuGfxPointFail = true;
+        }
+        pthread_mutex_unlock(&g_SorProcessMutex);
     }
 
     if(g_stdVideoGpuGfx != NULL )
@@ -1986,6 +2122,32 @@ static void sstar_canvas_deinit()
     }
 }
 
+static std::shared_ptr<GpuGraphicBuffer> sstar_sorcanvas_init(unsigned int width, unsigned int height)
+{
+    std::shared_ptr<GpuGraphicBuffer> pGpuCanvasBuf;
+    uint32_t u32UiFormat = DRM_FORMAT_ABGR8888;
+
+    if(g_stdSorGpuRender == NULL)
+    {
+        g_stdSorGpuRender = std::make_shared<GpuGraphicRender>();
+        g_stdSorGpuRender->init(u32UiFormat);
+    }
+    pGpuCanvasBuf = std::make_shared<GpuGraphicBuffer>(width, height, DRM_FORMAT_ABGR8888, ALIGN_UP(width * 4, 64));
+    if (!pGpuCanvasBuf->initCheck()) {
+        printf("Create _g_MainCanvas failed\n");
+        return NULL;
+    }
+    return pGpuCanvasBuf;
+}
+
+static void sstar_sorcanvas_deinit()
+{
+    _g_MainSorCanvas.mainFbCanvas = NULL;
+    if(g_stdSorGpuRender != NULL)
+    {
+        g_stdSorGpuRender->deinit();
+    }
+}
 
 void sstar_clear_plane(int plane)
 {
@@ -1999,11 +2161,15 @@ void sstar_clear_plane(int plane)
         add_tail_node(&g_HeadListOsdCommit, &entryNode->list);
 
     }
-    else
+    else if(plane == MOPG_ID0)
     {
         printf("Clear mop \n");
         add_tail_node(&g_HeadListVideoCommit, &entryNode->list);
-
+    }
+    else
+    {
+        printf("Clear cursor \n");
+        add_tail_node(&g_HeadListCursorCommit, &entryNode->list);
     }
 }
 
@@ -2122,15 +2288,17 @@ static std::shared_ptr<GpuGraphicBuffer> sstar_frame_process(std::shared_ptr<Gpu
 #endif
 
 
-
 void *sstar_DrmCommit_Thread(void * arg)
 {
     drm_buf_t osd_drm_buf;
+    drm_buf_t sor_drm_buf;
     drm_buf_t video_drm_buf;
     St_ListNode_t *ListOsdCommit = NULL;
+    St_ListNode_t *ListCursorCommit = NULL;
     St_ListNode_t *ListVideoCommit = NULL;
     int  try_count = 5;//timeout 5ms
     std::shared_ptr<GpuGraphicBuffer> osdCommitBuf;
+    std::shared_ptr<GpuGraphicBuffer> cusorCommitBuf;
     std::shared_ptr<GpuGraphicBuffer> videoCommitBuf;
     memset(&osd_drm_buf, 0x00, sizeof(drm_buf_t));
     memset(&video_drm_buf, 0x00, sizeof(drm_buf_t));
@@ -2172,6 +2340,40 @@ void *sstar_DrmCommit_Thread(void * arg)
         {
             osd_drm_buf.fb_id = 0;
             g_stDrmCfg.fb_id[0] = osd_drm_buf.fb_id;
+        }
+
+        if(_g_MainSorCanvas.pIsCreated)
+        {
+            pthread_mutex_lock(&g_cursor_canvas_mutex);
+            ListCursorCommit = get_first_node(&g_HeadListCursorCommit);
+            if(ListCursorCommit)
+            {
+                printf("%s_%d \n",__FUNCTION__,__LINE__);
+                cusorCommitBuf = ListCursorCommit->pGraphicBuffer;
+
+                if(cusorCommitBuf)
+                {
+
+                    sstar_add_commitbuf(cusorCommitBuf, &sor_drm_buf);
+                    g_stDrmCfg.fb_id[2] = sor_drm_buf.fb_id;
+                    g_stDrmCfg.planeNeedClean[2] = 0;
+                    g_stDrmCfg.planeNeedUpdate[2] = ListCursorCommit->planeNeedUpdate;
+                }
+                else
+                {
+                    sor_drm_buf.fb_id = 0;
+                    g_stDrmCfg.fb_id[2] = 0;
+                    g_stDrmCfg.planeNeedClean[2] = 1;
+                    g_stDrmCfg.planeNeedUpdate[2] = false;
+                }
+            }
+            pthread_mutex_unlock(&g_cursor_canvas_mutex);
+        }
+        else
+        {
+            sor_drm_buf.fb_id = 0;
+            g_stDrmCfg.fb_id[2] = sor_drm_buf.fb_id;
+            g_stDrmCfg.planeNeedUpdate[2] = false;
         }
 
         if(_g_HdmiRxPlayer.pIsCreated || _g_MediaPlayer.pIsCreated)
@@ -2217,8 +2419,8 @@ void *sstar_DrmCommit_Thread(void * arg)
             g_stDrmCfg.fb_id[1] = video_drm_buf.fb_id;
         }
 
-        if((!_g_MainCanvas.pIsCreated && !_g_HdmiRxPlayer.pIsCreated && !_g_MediaPlayer.pIsCreated) ||
-            ((prev_mop_gem_handle.first == video_drm_buf.fb_id) && (prev_gop_gem_handle.first == osd_drm_buf.fb_id)))
+        if((!_g_MainCanvas.pIsCreated && !_g_HdmiRxPlayer.pIsCreated && !_g_MediaPlayer.pIsCreated && !_g_MainSorCanvas.pIsCreated) ||
+            ((prev_mop_gem_handle.first == video_drm_buf.fb_id) && (prev_gop_gem_handle.first == osd_drm_buf.fb_id) && (prev_sor_gem_handle.first == sor_drm_buf.fb_id)))
         {
             pthread_mutex_unlock(&g_stDrmCfg.commit_Mutex);
             usleep(1 * 1000);
@@ -2226,7 +2428,21 @@ void *sstar_DrmCommit_Thread(void * arg)
         }
         else
         {
+
             atomic_set_plane(g_stDrmCfg.fb_id, g_stDrmCfg.planeNeedClean, g_stDrmCfg.planeNeedUpdate);
+
+
+            if(prev_sor_gem_handle.first != sor_drm_buf.fb_id)
+            {
+                g_cursor_canvas = ListCursorCommit->pGraphicBuffer;
+                if((sor_drm_buf.fb_id > 0))
+                {
+                    add_tail_node(&g_HeadListCursorOutput, &ListCursorCommit->list);
+                }
+                drm_free_gem_handle(&prev_sor_gem_handle);
+                prev_sor_gem_handle.first = sor_drm_buf.fb_id;
+                prev_sor_gem_handle.second = sor_drm_buf.gem_handle[0];
+            }
 
             if((prev_mop_gem_handle.first != video_drm_buf.fb_id))
             {
@@ -2253,7 +2469,7 @@ void *sstar_DrmCommit_Thread(void * arg)
             //wait frame disp
             if(g_stDrmCfg.out_fence != -1)
             {
-                ret = sync_wait(g_stDrmCfg.out_fence, 20);
+                ret = sync_wait(g_stDrmCfg.out_fence, 50);
                 if(ret != 0)
                 {
                     //printf("waring:maybe drop one drm frame, ret=%d out_fence=%d\n", ret, g_stDrmCfg.out_fence);
@@ -2261,7 +2477,6 @@ void *sstar_DrmCommit_Thread(void * arg)
                 close(g_stDrmCfg.out_fence);
                 g_stDrmCfg.out_fence = -1;
             }
-
         }
         pthread_mutex_unlock(&g_stDrmCfg.commit_Mutex);
     }
@@ -2358,12 +2573,37 @@ static int sstar_draw_canvas(plane_info_t osdInfo)
 
 }
 
+static int sstar_draw_sorcanvas(plane_info_t sorInfo)
+{
+    GrFillInfo dstFillInfo;
+    GrBitblitInfo bitblitinfo;
+    std::shared_ptr<GpuGraphicBuffer> subFbCanvas;
+    _g_MainSorCanvas.mainFbCanvas = sstar_sorcanvas_init(sorInfo.out_width, sorInfo.out_height);
+    if(_g_MainSorCanvas.mainFbCanvas == NULL)
+    {
+        printf("Error:mainFbCanvas pointer is NULL\n");
+        return -1;
+    }
+    _g_MainSorCanvas.mutex = PTHREAD_MUTEX_INITIALIZER;
+    _g_MainSorCanvas.pIsCreated = true;
+    dstFillInfo.rect.left = 0;
+    dstFillInfo.rect.top = 0;
+    dstFillInfo.rect.right = sorInfo.out_width;
+    dstFillInfo.rect.bottom = sorInfo.out_height;
+    dstFillInfo.color = 0xff0000ff;
+    g_stdSorGpuRender->fill(_g_MainSorCanvas.mainFbCanvas, dstFillInfo);
+    g_stdSorGpuRender->deinit();
+    g_stdSorGpuRender = NULL;
+    return 0;
+
+}
+
+
 void *sstar_OsdProcess_Thread(void * arg)
 {
     int ret;
     uint32_t u32UiFormat = DRM_FORMAT_ABGR8888;
     St_ListNode_t *ListOsdOutput;
-
     ret = sstar_OsdList_Init();
     if (ret < 0)
     {
@@ -2393,7 +2633,7 @@ void *sstar_OsdProcess_Thread(void * arg)
             }
             else
             {
-
+                pthread_mutex_lock(&g_OsdProcessMutex);
                 if(!g_stdOsdGpuGfx)
                 {
                     g_RectDisplayRegion[0].left = 0;
@@ -2403,7 +2643,6 @@ void *sstar_OsdProcess_Thread(void * arg)
                     g_stdOsdGpuGfx = sstar_gpugfx_context_init(g_CurOsdInfo.out_width, g_CurOsdInfo.out_height, u32UiFormat, false);
                     ListOsdOutput->planeNeedUpdate = true;
                 }
-                pthread_mutex_lock(&g_OsdProcessMutex);
                 ret = g_stdOsdGpuGfx->process(_g_MainCanvas.mainFbCanvas, g_RectDisplayRegion[0], ListOsdOutput->pGraphicBuffer);
                 if (ret)
                 {
@@ -2414,6 +2653,7 @@ void *sstar_OsdProcess_Thread(void * arg)
                     add_tail_node(&g_HeadListOsdOutput, &ListOsdOutput->list);
                     continue;
                 }
+
                 pthread_mutex_unlock(&g_OsdProcessMutex);
             }
             pthread_mutex_unlock(&_g_MainCanvas.mutex);
@@ -2428,6 +2668,7 @@ void *sstar_OsdProcess_Thread(void * arg)
 
     }
 
+    printf("sstar_OsdProcess_Thread exit \n");
     sstar_clear_plane(GOP_UI_ID);
 
     if(g_stdOsdGpuGfx != NULL)
@@ -2438,6 +2679,134 @@ void *sstar_OsdProcess_Thread(void * arg)
     sstar_canvas_deinit();
     sstar_OsdList_DeInit();
     return NULL;
+}
+
+
+int sstar_set_cursorxy(unsigned int pos_x, unsigned int pos_y)
+{
+    Rect tmp_RectDisplayRegion;
+    uint32_t u32UiFormat = DRM_FORMAT_ABGR8888;
+    St_ListNode_t* ListCursorOutput;
+    int ret;
+
+    if(pos_x < 0)
+    {
+       g_CurSorInfo.pos_x = 0;
+    }
+    else if(pos_x >= g_stDrmCfg.width - cursor_x_size)
+    {
+        g_CurSorInfo.pos_x = (g_stDrmCfg.width - cursor_x_size);
+    }
+    else
+    {
+        g_CurSorInfo.pos_x = pos_x;
+    }
+
+
+    if(pos_y < 0)
+    {
+       g_CurSorInfo.pos_y = 0;
+    }
+    else if(pos_x >= g_stDrmCfg.height - cursor_y_size)
+    {
+        g_CurSorInfo.pos_y = (g_stDrmCfg.height - cursor_x_size);
+    }
+    else
+    {
+        g_CurSorInfo.pos_y = pos_y;
+    }
+
+
+    ListCursorOutput = get_first_node(&g_HeadListCursorOutput);//get scl out buf
+
+    if(ListCursorOutput)
+    {
+        cursor_time = getOsTime();
+        if(!g_bGpuProcessNeed)
+        {
+            ListCursorOutput->pGraphicBuffer = _g_MainSorCanvas.mainFbCanvas;
+        }
+        else
+        {
+            pthread_mutex_lock(&g_SorProcessMutex);
+            if(!g_stdSorGpuGfx)
+            {
+                g_stdSorGpuGfx = sstar_gpugfx_context_init(g_CurSorInfo.out_width, g_CurSorInfo.out_height, u32UiFormat, false);
+            }
+
+            tmp_RectDisplayRegion.left = 0;
+            tmp_RectDisplayRegion.top = 0;
+            tmp_RectDisplayRegion.right = g_CurSorInfo.out_width;
+            tmp_RectDisplayRegion.bottom = g_CurSorInfo.out_height;
+            ret = g_stdSorGpuGfx->process(_g_MainSorCanvas.mainFbCanvas, tmp_RectDisplayRegion, ListCursorOutput->pGraphicBuffer);
+            if (ret)
+            {
+                printf("cursor:Gpu graphic effect process failed\n");
+                pthread_mutex_unlock(&g_SorProcessMutex);
+                return -1;
+            }
+            pthread_mutex_unlock(&g_SorProcessMutex);
+        }
+        ListCursorOutput->planeNeedUpdate = true;
+        add_tail_node(&g_HeadListCursorCommit, &ListCursorOutput->list);
+    }
+    return 0;
+
+}
+
+
+#if 0
+void *sstar_CursorProcess_Thread(void * arg)
+{
+    Rect tmpRectDisplayRegion;
+    uint32_t u32UiFormat = DRM_FORMAT_ABGR8888;
+    while(_g_MainSorCanvas.pIsCreated){
+        pthread_mutex_lock(&g_cursor_canvas_mutex);
+        if (cursor_time && (getOsTime() - cursor_time >= 5000))//hide cursor
+        {
+            if (!g_stDrmCfg.planeNeedClean[2] && g_stDrmCfg.planeNeedUpdate[2]){
+                sstar_clear_plane(GOP_CURSOR_ID);
+            }
+        }
+        pthread_mutex_unlock(&g_cursor_canvas_mutex);
+        usleep(100 * 1000);
+    }
+    return NULL;
+}
+#endif
+
+int sttar_Cursor_Creat()
+{
+    int ret = 0;
+    if(!_g_MainSorCanvas.mainFbCanvas)
+    {
+        g_CurSorInfo.pos_x = 0;
+        g_CurSorInfo.pos_y = 0;
+        g_CurSorInfo.out_width = cursor_x_size;
+        g_CurSorInfo.out_height = cursor_y_size;
+        sstar_CursorList_Init();
+        ret = sstar_draw_sorcanvas(g_CurSorInfo);
+        if(0 != ret)
+        {
+            printf("sttar_Cursor_Creat fail \n");
+            return ret;
+        }
+
+        printf("sttar_Cursor_Creat\n");
+        //pthread_create(&g_pThreadCursorDrm, NULL, sstar_CursorProcess_Thread, NULL);
+    }
+    return ret;
+}
+void sttar_Cursor_Destory()
+{
+    _g_MainSorCanvas.pIsCreated = false;
+    if(g_stdSorGpuGfx != NULL)
+    {
+        g_stdSorGpuGfx->deinit();
+        g_stdSorGpuGfx = NULL;
+    }
+    sstar_sorcanvas_deinit();
+    sstar_CursorList_DeInit();
 }
 
 void* sstar_HdmiPlugsDetect_Thread(void * arg)
@@ -3630,6 +3999,7 @@ static MI_S32 sstar_MediaPipeLine_Creat()
     return MI_SUCCESS;
 }
 
+
 static MI_S32 sstar_MediaPipeLine_Destroy()
 {
 
@@ -3715,6 +4085,10 @@ static MI_S32 sstar_BaseModule_DeInit()
         g_bThreadExitUiDrm = false;
         pthread_join(g_pThreadUiDrm, NULL);
         g_pThreadUiDrm = NULL;
+    }
+    if(_g_MainSorCanvas.pIsCreated)
+    {
+        sttar_Cursor_Destory();
     }
 
     if (g_u8PipelineMode == 0)
@@ -4101,7 +4475,20 @@ void sstar_CmdParse_Pause(void)
                     #endif
                 }
                 break;
+            case 'p':
+            {
+                g_tmp_x += 30;
+                g_tmp_y += 30;
+                sttar_Cursor_Creat();
+                sstar_set_cursorxy(g_tmp_x, g_tmp_y);
+            }
+            break;
+            case 'o':
+            {
+                sstar_clear_plane(GOP_CURSOR_ID);
+            }
 
+            break;
             //default:
                // break;
         }
@@ -4154,6 +4541,7 @@ MI_S32 main(int argc, char **argv)
 
 
     STCHECKRESULT(sstar_BaseModule_DeInit());
+    sstar_sorcanvas_deinit();
     sstar_deinit_drm();
 
     return 0;
