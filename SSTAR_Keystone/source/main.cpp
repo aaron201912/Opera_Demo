@@ -279,15 +279,6 @@ typedef enum
     E_STREAM_MAX = E_MI_SYS_PIXEL_FRAME_FORMAT_MAX,
 } E_VIDEO_RAW_FORMAT;
 
-unsigned long long getOsTime(void)
-{
-    unsigned long long u64CurTime = 0;
-    struct timeval tv;
-
-    gettimeofday(&tv, NULL);
-    u64CurTime = ((unsigned long long)(tv.tv_sec))*1000 + tv.tv_usec/1000;
-    return u64CurTime;
-}
 unsigned long long cursor_time = 0;
 unsigned int cursor_x_size = 320;
 unsigned int cursor_y_size = 240;
@@ -594,6 +585,17 @@ typedef struct St_Csc_s
     MI_U32 u32Sharpness;
 
 } St_Csc_t;
+
+
+unsigned long long getOsTime(void)
+{
+    unsigned long long u64CurTime = 0;
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    u64CurTime = ((unsigned long long)(tv.tv_sec))*1000 + tv.tv_usec/1000;
+    return u64CurTime;
+}
 
 
 static St_ListNode_t* get_first_node(St_List_t *st_list)
@@ -3165,7 +3167,7 @@ void *sstar_HdmiRxProcess_Thread(void * param)
             if(stDmaOutputBufInfo.u32Status != MI_SYS_DMABUF_STATUS_DONE)
             {
                 add_tail_node(&g_HeadListSclOutput, &GfxReadListNode->list);
-                printf("MI_SYS_ChnOutputPortDequeueDmabuf Invail=%d \n",stDmaOutputBufInfo.u32Status);
+                //printf("MI_SYS_ChnOutputPortDequeueDmabuf Invail=%d \n",stDmaOutputBufInfo.u32Status);
                 continue;
             }
 
@@ -3598,13 +3600,14 @@ void *sstar_HDMI_AudioProcess_Thread(void * arg)
     printf("%s thread_id: %llx\n", __FUNCTION__, (uint64_t)pthread_self());
     while(g_bThreadExitHdmiAudio == true)
     {
-        ret = hdmi_player_get_pcm(&frame);
-        if (0 != ret) {
-            printf("%s hdmi_player_get_pcm failed\n", __FUNCTION__);
-            break;
+        if(!_g_HdmiRxPlayer.player_working)
+        {
+            usleep(100 * 1000);
+            continue;
         }
-        if (!frame) {
-            printf("%s frame is null\n", __FUNCTION__);
+        ret = hdmi_player_get_pcm(&frame, 100);
+        if (0 != ret || !frame) {
+            printf("%s hdmi_player_get_pcm failed\n", __FUNCTION__);
             continue;
         }
 
@@ -4019,11 +4022,45 @@ static MI_S32 sstar_MediaPipeLine_Destroy()
         pthread_join(g_player_thread, NULL);
         g_player_thread = NULL;
     }
+    if(g_pThreadAudio)
+    {
+        pthread_join(g_pThreadAudio, NULL);
+        g_pThreadAudio = NULL;
+    }
     mm_player_close();
     sstar_MediaList_DeInit();
     return MI_SUCCESS;
 
 }
+
+MI_S32 sstar_set_volume(int volume)
+{
+    int ret = 0;
+    if(_g_MediaPlayer.pIsCreated)
+    {
+        ret = mm_player_set_volume(volume);
+    }
+    else if(_g_HdmiRxPlayer.pIsCreated)
+    {
+        ret = hdmi_player_set_volume(volume);
+    }
+    return ret;
+}
+
+MI_S32 sstar_set_mute(bool mute)
+{
+    int ret = 0;
+    if(_g_MediaPlayer.pIsCreated)
+    {
+        ret =mm_player_set_mute(mute);
+    }
+    else if(_g_HdmiRxPlayer.pIsCreated)
+    {
+        ret =hdmi_player_set_mute(mute);
+    }
+    return ret;
+}
+
 
 static MI_S32 sstar_BaseModule_Init()
 {
@@ -4534,8 +4571,9 @@ MI_S32 main(int argc, char **argv)
     sstar_get_pictureQuality(&g_picQuality);
 
     STCHECKRESULT(sstar_BaseModule_Init());
-    mm_player_set_mute(false);
-    mm_player_set_volume(30);
+
+    sstar_set_mute(false);
+    sstar_set_volume(30);
 
     sstar_CmdParse_Pause();
 

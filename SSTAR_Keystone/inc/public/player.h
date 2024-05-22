@@ -155,6 +155,7 @@ typedef struct frame_info_s {
     int      channels;
     int64_t  pts;
     int      key_frame;
+    void     *opaque;
 } frame_info_t;
 
 typedef struct player_info_s {
@@ -208,60 +209,60 @@ typedef struct player_info_s {
 /**
  * Open file or url and set the windows size
  */
-int mm_player_open(player_info_t *input);
+__attribute__((visibility("default"))) int mm_player_open(player_info_t *input);
 
 /**
  * Close file or url
  */
-int mm_player_close(void);
+__attribute__((visibility("default"))) int mm_player_close(void);
 
 /**
  * Stop playing
  */
-int mm_player_pause(void);
+__attribute__((visibility("default"))) int mm_player_pause(void);
 
 /**
  * Resume playing
  */
-int mm_player_resume(void);
+__attribute__((visibility("default"))) int mm_player_resume(void);
 
 /**
  * Seek file forward or backward in the current position for time
  */
-int mm_player_seek(double time);
+__attribute__((visibility("default"))) int mm_player_seek(double time);
 
 /**
  * Seek file to the setting time
  */
-int mm_player_seek2time(double time);
+__attribute__((visibility("default"))) int mm_player_seek2time(double time);
 
 /**
  * Get the current playing time of video file
  */
-int mm_player_getposition(double *position);
+__attribute__((visibility("default"))) int mm_player_getposition(double *position);
 
 /**
  * Get the total time of video file
  */
-int mm_player_getduration(double *duration);
+__attribute__((visibility("default"))) int mm_player_getduration(double *duration);
 
 /**
  * Set the audio volume.
  * volume = [0]~[100]
  */
-int mm_player_set_volume(int volume);
+__attribute__((visibility("default"))) int mm_player_set_volume(int volume);
 
 /**
  * Mute the audio.
  * volumn = false/true
  */
-int mm_player_set_mute(bool mute);
+__attribute__((visibility("default"))) int mm_player_set_mute(bool mute);
 
 /**
  * Set the windows size.
  * NOTE: UNSUPPORT
  */
-int mm_player_set_window(int x, int y, int width, int height);
+__attribute__((visibility("default"))) int mm_player_set_window(int x, int y, int width, int height);
 
 /**
  * Set player others options.
@@ -277,14 +278,14 @@ int mm_player_set_window(int x, int y, int width, int height);
  * mm_player_set_opts("play_mode", "", AV_MODE_LOOP); -- set player mode, such as loop or once.
  * mm_player_set_opts("spec_file_path", file_path, 0); -- set spec file path to check spec limitation.
  */
-int mm_player_set_opts(const char *key, const char *value, int flags);
+__attribute__((visibility("default"))) int mm_player_set_opts(const char *key, const char *value, int flags);
 
 /**
  * Set the decode output attribute.
  * width: decode output width
  * height: decode output height
  */
-int mm_player_set_dec_out_attr(int width, int height);
+__attribute__((visibility("default"))) int mm_player_set_dec_out_attr(int width, int height);
 
 /**
  * Set the video rotation.
@@ -296,7 +297,7 @@ int mm_player_set_dec_out_attr(int width, int height);
  * width: input rotate width
  * height: input rotate height
  */
-int mm_player_set_rotate(int rotate, int width, int height);
+__attribute__((visibility("default"))) int mm_player_set_rotate(int rotate, int width, int height);
 
 /**
  * Get player real status.
@@ -311,14 +312,14 @@ int mm_player_set_rotate(int rotate, int width, int height);
  * AV_PLAY_COMPLETE -- end of file
  * AV_PLAY_PAUSE    -- stoping player
  */
-int mm_player_get_status(void);
+__attribute__((visibility("default"))) int mm_player_get_status(void);
 
 /**
  * Enable/disable display if player is working. Clear screen if player is closed.
  * Please call the api after exit player to clear display.
  * NOTE: UNSUPPORT
  */
-int mm_player_flush_screen(bool enable);
+__attribute__((visibility("default"))) int mm_player_flush_screen(bool enable);
 
 /**
  * This function is a blocking function, with a value equal to 0 indicating success in getting a frame
@@ -334,12 +335,12 @@ int mm_player_flush_screen(bool enable);
  * int64_t  pts;
  * int      key_frame;
  */
-int mm_player_get_video_frame(frame_info_t *frame_info);
+__attribute__((visibility("default"))) int mm_player_get_video_frame(frame_info_t *frame_info);
 
 /**
  * User put back a video frame to player, and must be paired with the mm_player_get_video_frame function.
  */
-int mm_player_put_video_frame(frame_info_t *frame_info);
+__attribute__((visibility("default"))) int mm_player_put_video_frame(frame_info_t *frame_info);
 
 /**
  * This function is a blocking function, with a value equal to 0 indicating success in getting a frame
@@ -356,18 +357,25 @@ int mm_player_put_video_frame(frame_info_t *frame_info);
  * int64_t  pts;
  * int      key_frame;
  */
-int mm_player_get_audio_frame(frame_info_t *frame_info);
+__attribute__((visibility("default"))) int mm_player_get_audio_frame(frame_info_t *frame_info);
 
 /**
  * User put back a audio frame to player, and must be paired with the mm_player_get_audio_frame function.
  */
-int mm_player_put_audio_frame(frame_info_t *frame_info);
+__attribute__((visibility("default"))) int mm_player_put_audio_frame(frame_info_t *frame_info);
 
 /**
  * Call the api after mm_player_get_audio_frame, send pcm data to device.
  * User can perform algorithm processing on audio data and sends the processed data to deivce through this api
  */
-int mm_player_write_audio_frame(uint8_t *buffer, int size);
+__attribute__((visibility("default"))) int mm_player_write_audio_frame(uint8_t *buffer, int size);
+
+/**
+ * Call the api after mm_player_get_video_frame, send yuv data to display.
+ * User can perform algorithm processing on yuv data and sends the processed data to display through this api
+ * NOTE: the input frame_info must be the same as when mm_player_get_video_frame.
+ */
+__attribute__((visibility("default"))) int mm_player_write_video_frame(frame_info_t *frame_info);
 
 /* register event callback function
  * h26x hard decoding event type:
@@ -382,24 +390,24 @@ int mm_player_write_audio_frame(uint8_t *buffer, int size);
  * AV_CODEC_EVENT_SEQCHANGE
  *
  */
-int mm_player_register_event_cb(void (*event_handler)(event_info_t *event_info));
+__attribute__((visibility("default"))) int mm_player_register_event_cb(void (*event_handler)(event_info_t *event_info));
 
 /* Send video data to decoder, and send audio data to output device.
  * timestamp: video or audio pts
  * media_type: AV_MEDIA_TYPE_AUDIO/AV_MEDIA_TYPE_VIDEO
  */
-int mm_player_send_stream(const uint8_t *buffer, int size, int64_t timestamp, int media_type);
+__attribute__((visibility("default"))) int mm_player_send_stream(const uint8_t *buffer, int size, int64_t timestamp, int media_type);
 
 /* Only for airplay, support to add audio or video stream alone and start playing.
  * player_info_t: refer to mm_player_open
  * media_type: AV_MEDIA_TYPE_AUDIO/AV_MEDIA_TYPE_VIDEO
  */
-int mm_player_add_stream(player_info_t *input, int media_type);
+__attribute__((visibility("default"))) int mm_player_add_stream(player_info_t *input, int media_type);
 
 /* Only for airplay, support to remove audio or video stream alone and stop playing.
  * media_type: AV_MEDIA_TYPE_AUDIO/AV_MEDIA_TYPE_VIDEO
  */
-int mm_player_remove_stream(int media_type);
+__attribute__((visibility("default"))) int mm_player_remove_stream(int media_type);
 
 #ifdef __cplusplus
 }

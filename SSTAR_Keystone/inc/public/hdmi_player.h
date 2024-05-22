@@ -221,10 +221,14 @@ __attribute__((visibility("default"))) int32_t hdmi_player_set_mute(bool mute);
 *
 * Parameters
 * [OUT]    frame  -  just fill in an empty frame pointer
+* [IN]     timeout_ms  -  timeout(milliseconds), negative: blocking, positive: non-blocking
+* Note
+*     If timeout_ms is zero, the user thread needs to control the frequency of calls,
+*     otherwise it will cause the user thread CPU loading to be high.
 * Returns
 *     Zero if successful, otherwise a negative error code.
 */
-__attribute__((visibility("default"))) int32_t hdmi_player_get_pcm(hdmi_player_audio_frame_t **frame);
+__attribute__((visibility("default"))) int32_t hdmi_player_get_pcm(hdmi_player_audio_frame_t **frame, int32_t timeout_ms);
 /*
 *  Put back frame data to player, used with @hdmi_player_get_pcm
 *
