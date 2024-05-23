@@ -18,6 +18,8 @@ rights to any and all damages, losses, costs and expenses resulting therefrom.
 #include <stdio.h>
 #include <stdint.h>
 
+extern int gGpugfxInitCount;
+
 typedef struct {
     /// Minimum X coordinate of the rectangle.
     uint32_t left;

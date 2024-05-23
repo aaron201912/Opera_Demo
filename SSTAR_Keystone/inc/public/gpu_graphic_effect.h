@@ -57,6 +57,7 @@ class GpuGraphicEffect {
      * width: Output framebuffer width
      * height: Output framebuffer height
      * format：Output framebuffer fourcc format
+     * enableAfbc: Framebuffer enable afbc status
      */
     int32_t init(int32_t width, int32_t height, uint32_t format, bool enableAfbc = false);
 
