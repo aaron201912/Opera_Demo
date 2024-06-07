@@ -279,6 +279,7 @@ typedef enum
     E_STREAM_MAX = E_MI_SYS_PIXEL_FRAME_FORMAT_MAX,
 } E_VIDEO_RAW_FORMAT;
 
+
 unsigned long long cursor_time = 0;
 unsigned int cursor_x_size = 320;
 unsigned int cursor_y_size = 240;
@@ -711,6 +712,48 @@ MI_S32 sstar_get_pictureQuality(St_Csc_t *picQuality)
     return MI_SUCCESS;
 }
 
+MI_S32 sstar_set_DLC(int enable)
+{
+    struct drm_sstar_set_dlc_active dlc;
+    memset(&dlc, 0x00, sizeof(drm_sstar_set_dlc_active));
+    dlc.crtcId = g_stDrmCfg.crtc_id;
+    dlc.enable = enable;
+    if(dlc.crtcId){
+        int32_t ret = drmIoctl(g_stDrmCfg.fd, DRM_IOCTL_SSTAR_SET_DLC_ACTIVE, &dlc);
+        if (ret < 0) {
+            printf("sstar_set_DLC error\n");
+            return -1;
+        }
+    }else{
+        return -1;
+    }
+    return MI_SUCCESS;
+}
+
+MI_S32 sstar_get_luma(drm_sstar_get_luma luma)
+{
+    memset(&luma, 0x00, sizeof(drm_sstar_get_luma));
+    int32_t ret = drmIoctl(g_stDrmCfg.fd, DRM_IOCTL_SSTAR_GET_LUMA, &luma);
+    if (ret < 0) {
+        printf("sstar_get_luma error\n");
+        return -1;
+    }
+    return MI_SUCCESS;
+}
+
+MI_S32 sstar_get_histInfo(uint16_t Dlc_info[256])
+{
+    struct drm_sstar_tool_get_dlc_info pictureQuality;
+    memset(&pictureQuality, 0x00, sizeof(drm_sstar_tool_get_dlc_info));
+    pictureQuality.needHistInfo = 1;
+    pictureQuality.histInfo = (uint64_t)Dlc_info;
+    int32_t ret = drmIoctl(g_stDrmCfg.fd, DRM_IOCTL_SSTAR_TOOL_GET_DLC_INFO, &pictureQuality);
+    if (ret < 0) {
+        printf("sstar_get_histInfo error\n");
+        return -1;
+    }
+    return MI_SUCCESS;
+}
 
 St_Csc_t g_picQuality;
 
@@ -4522,6 +4565,21 @@ void sstar_CmdParse_Pause(void)
             break;
             case 'o':
             {
+                /*drm_sstar_get_luma luma;
+                sstar_set_DLC(1);
+                sstar_get_luma(luma);
+                printf("11avgVal = %d,maxVal = %d,minVal = %d\n",luma.avgVal,luma.maxVal,luma.minVal);
+                uint16_t test[256];
+                memset(test, 0x00 , sizeof(uint16_t) * 256);
+                sstar_get_histInfo(test);
+                for (int i=0; i<256; i++){
+                    if(0 == (i%16))
+                    {
+                        printf("\n");
+                    }
+                    printf("ox%x ",test[i]);
+                }
+                printf("\n");*/
                 sstar_clear_plane(GOP_CURSOR_ID);
             }
 
