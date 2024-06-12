@@ -478,7 +478,7 @@ std::shared_ptr<GpuGraphicRender> g_stdGfxGpuRender = NULL;
 Rect g_RectDisplayRegion[2]; //0 for osd,1 for video
 
 static frame_info_t g_TemFrameInfo;
-std::shared_ptr<GpuGraphicBuffer>   g_CurGraphicBuffer;
+std::shared_ptr<GpuGraphicBuffer>   g_CurGraphicBuffer = NULL;
 
 
 typedef struct  St_List_s {
@@ -2475,7 +2475,17 @@ void *sstar_DrmCommit_Thread(void * arg)
         {
 
             atomic_set_plane(g_stDrmCfg.fb_id, g_stDrmCfg.planeNeedClean, g_stDrmCfg.planeNeedUpdate);
-
+            //wait frame disp
+            if(g_stDrmCfg.out_fence != -1)
+            {
+                ret = sync_wait(g_stDrmCfg.out_fence, 50);
+                if(ret != 0)
+                {
+                    //printf("waring:maybe drop one drm frame, ret=%d out_fence=%d\n", ret, g_stDrmCfg.out_fence);
+                }
+                close(g_stDrmCfg.out_fence);
+                g_stDrmCfg.out_fence = -1;
+            }
 
             if(prev_sor_gem_handle.first != sor_drm_buf.fb_id)
             {
@@ -2510,17 +2520,6 @@ void *sstar_DrmCommit_Thread(void * arg)
                 drm_free_gem_handle(&prev_gop_gem_handle);
                 prev_gop_gem_handle.first = osd_drm_buf.fb_id;
                 prev_gop_gem_handle.second = osd_drm_buf.gem_handle[0];
-            }
-            //wait frame disp
-            if(g_stDrmCfg.out_fence != -1)
-            {
-                ret = sync_wait(g_stDrmCfg.out_fence, 50);
-                if(ret != 0)
-                {
-                    //printf("waring:maybe drop one drm frame, ret=%d out_fence=%d\n", ret, g_stDrmCfg.out_fence);
-                }
-                close(g_stDrmCfg.out_fence);
-                g_stDrmCfg.out_fence = -1;
             }
         }
         pthread_mutex_unlock(&g_stDrmCfg.commit_Mutex);
@@ -2665,6 +2664,11 @@ void *sstar_OsdProcess_Thread(void * arg)
         {
             pthread_mutex_lock(&_g_MainCanvas.mutex);
 
+            if(ListOsdOutput->pGraphicBuffer && g_stdOsdGpuGfx)
+            {
+                g_stdOsdGpuGfx->releaseBuffer(ListOsdOutput->pGraphicBuffer);
+                ListOsdOutput->pGraphicBuffer = NULL;
+            }
 
             if(!g_bGpuProcessNeed)
             {
@@ -2773,6 +2777,11 @@ int sstar_set_cursorxy(unsigned int pos_x, unsigned int pos_y)
         }
         else
         {
+            if(ListCursorOutput->pGraphicBuffer && g_stdSorGpuGfx)
+            {
+                g_stdSorGpuGfx->releaseBuffer(ListCursorOutput->pGraphicBuffer);
+                ListCursorOutput->pGraphicBuffer = NULL;
+            }
             pthread_mutex_lock(&g_SorProcessMutex);
             if(!g_stdSorGpuGfx)
             {
@@ -3217,6 +3226,12 @@ void *sstar_HdmiRxProcess_Thread(void * param)
             ListVideoOutput = get_first_node(&g_HeadListVideoOutput);//get commit buf
             if(ListVideoOutput)
             {
+
+                if(ListVideoOutput->pGraphicBuffer && g_stdHdmiRxGpuGfx)
+                {
+                    g_stdHdmiRxGpuGfx->releaseBuffer(ListVideoOutput->pGraphicBuffer);
+                    ListVideoOutput->pGraphicBuffer = NULL;
+                }
                 if(!g_bGpuProcessNeed)
                 {
                     if(g_stdHdmiRxGpuGfx)
@@ -3340,6 +3355,11 @@ void *sstar_VideoProcess_Thread(void * arg)
             ListVideoOutput = get_first_node(&g_HeadListVideoOutput);
             if(ListVideoOutput)
             {
+                if(ListVideoOutput->pGraphicBuffer && g_stdVideoGpuGfx)
+                {
+                    g_stdVideoGpuGfx->releaseBuffer(ListVideoOutput->pGraphicBuffer);
+                    ListVideoOutput->pGraphicBuffer = NULL;
+                }
                 try_count = 5;
                 ret = mm_player_get_video_frame(&frame_info);
                 while(ret != 0 && try_count && _g_MediaPlayer.player_working)

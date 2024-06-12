@@ -42,6 +42,9 @@ class GpuGraphicBuffer {
     uint32_t getBufferSize() const      { return mSize; }
     uint32_t *getStride()               { return mStride; }
     uint32_t *getPlaneOffset()          { return mPlaneOffset; }
+    bool getInUse()                     { return mInUse; }
+    void setInUse(bool inUse)           { mInUse = inUse; }
+
     void *map(CpuAccess access);
     void flushCache(CpuAccess access);
     void unmap(void *virAddr, CpuAccess access);
@@ -62,4 +65,5 @@ class GpuGraphicBuffer {
     uint32_t mStride[3];
     uint32_t mPlaneOffset[3];
     int32_t mFd;
+    bool mInUse;
 };

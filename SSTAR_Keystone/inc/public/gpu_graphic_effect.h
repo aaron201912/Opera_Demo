@@ -124,6 +124,8 @@ class GpuGraphicEffect {
     int32_t process(std::shared_ptr<GpuGraphicBuffer> inputBuffer, Rect displayFrame,
                     std::shared_ptr<GpuGraphicBuffer>& outputBuffer);
 
+    int32_t releaseBuffer(std::shared_ptr<GpuGraphicBuffer> buffer);
+
   private:
     EGLBoolean eglInit();
     GLboolean glesInit();
