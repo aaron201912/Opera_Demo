@@ -3946,7 +3946,6 @@ static MI_S32 sstar_HdmiPipeLine_Creat()
     hdmi_cfg.game_mode = false;
     hdmi_cfg.mute = false;
     hdmi_cfg.volume = 60;
-    hdmi_cfg.ai_sample_rate = E_HDMI_PLAYER_AIO_SAMPLE_RATE_ORIGINAL;
     hdmi_cfg.ao_sample_rate = E_HDMI_PLAYER_AIO_SAMPLE_RATE_ORIGINAL;
     hdmi_cfg.drm_info.fd = g_stDrmCfg.fd;
     hdmi_cfg.drm_info.panel_refresh_rate = g_stDrmCfg.Connector->modes->vrefresh;
@@ -4039,16 +4038,13 @@ static MI_S32 sstar_MediaPipeLine_Creat()
     int ret;
     g_bThreadExitGfx = true;
     g_bThreadExitPlayer = true;
-
     ret = sstar_MediaList_Init();
     if (ret < 0)
     {
         printf("Error: sstar_MediaList_Init fail \n");
         return NULL;
     }
-
     sstar_media_context_init();
-
     ret = mm_player_open(&_g_MediaPlayer.param);
     if (ret < 0)
     {
@@ -4644,17 +4640,14 @@ MI_S32 main(int argc, char **argv)
         printf("init_drm fail \n");
         return -1;
     }
-
     //Get pictureQuality
     sstar_get_pictureQuality(&g_picQuality);
-
     STCHECKRESULT(sstar_BaseModule_Init());
 
     sstar_set_mute(false);
+    
     sstar_set_volume(30);
-
     sstar_CmdParse_Pause();
-
 
     STCHECKRESULT(sstar_BaseModule_DeInit());
     sstar_sorcanvas_deinit();

@@ -52,9 +52,16 @@ typedef enum {
 
 /* hdmi player notification events */
 typedef enum {
-    E_HDMI_PLAYER_EVENT_UNSUPPORTED = 0, // exceeds player capabilities
+    E_HDMI_PLAYER_EVENT_AUDIO_UNSUPPORTED = 0, // exceeds player capabilities
+    E_HDMI_PLAYER_EVENT_AVSYNC_RESET,          // audio and video are not synchronized, reset is needed
     E_HDMI_PLAYER_EVENT_MAX,
 } hdmi_player_event_e;
+
+typedef enum {
+    E_HDMI_HOTPLUG_STATUS_OUT = 0,
+    E_HDMI_HOTPLUG_STATUS_IN,
+    E_HDMI_HOTPLUG_STATUS_MAX,
+} hdmi_hotplug_status_e;
 
 /* audio input/output frame */
 typedef struct hdmi_player_pcm_frame_s {
@@ -131,10 +138,12 @@ typedef struct hdmi_player_config_s {
     hdmi_player_ao_format_e ao_format;
     /* drm info, users need to open drm in advance */
     hdmi_player_drm_info_t drm_info;
-    /* input(hdmi-rx) audio sample rate */
-    hdmi_player_aio_sample_rate_e ai_sample_rate;
     /* output(playback) audio sample rate */
     hdmi_player_aio_sample_rate_e ao_sample_rate;
+    /* Set the maximum delay time allowed for audio sound effect algorithm */
+    int32_t audio_alg_max_delay_time_ms;
+    /* Set max video queue size */
+    int32_t video_frame_queue_size;
     /* users can monitor player events by registering a callback function */
     hdmi_player_event_cb_t event_cb;
     /* users need to register this callback to let avsync notify the user to drop video frames */
@@ -252,11 +261,21 @@ __attribute__((visibility("default"))) int32_t hdmi_player_write_pcm(hdmi_player
 *
 * Parameters
 * [IN]    frame -  video frame, The user needs to get the video frame from scl and fill in
-*                  the buffer handle and pts (system time) before sending it in.
+*                  the buffer handle. the interval between frames must not exceed the frame rate,
+*                  otherwise it will be out of sync. such as: frame_rate=60FPS, interval_time<=16.666667ms
 * Returns
 *     Zero if successful, otherwise a negative error code.
 */
 __attribute__((visibility("default"))) int32_t hdmi_player_video_render(hdmi_player_video_frame_t *frame);
+/*
+* Set hdmi plug status
+*
+* Parameters
+* [IN]    state -  hdmi_hotplug_status_e
+* Returns
+*     Zero if successful, otherwise a negative error code.
+*/
+__attribute__((visibility("default"))) int32_t hdmi_player_hotplug_status_changed(hdmi_hotplug_status_e state);
 
 #ifdef __cplusplus
 }
