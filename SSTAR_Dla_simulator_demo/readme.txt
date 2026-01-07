@@ -1,10 +1,17 @@
 ﻿dla_simulator用于推演模型，功能与SGS_IPU_SDK中simulator.py类似
 
 编译说明：
-    a.修改makefile中的编译链为系统对应编译链，修改PROJ_ROOT路径	
-    b. make clean; make TOOLCHAIN_VERSION=6.4.0 或 make TOOLCHAIN_VERSION=10.2.1
+    a.修改makefile中的编译链为系统对应编译链
 
-运行可获得使用方法提示
+    b.如果将demo放到跟project同级目录   （默认方式）
+    --> make clean; make TOOLCHAIN_VERSION=6.4.0 OR make clean; make TOOLCHAIN_VERSION=10.2.1
+
+    c.demo放置到任意路径，只需在make的时候指定PROJ_ROOT到SDK工程project的目录（需要链接SDK头文件）
+    --> declare -x PROJ_ROOT=~/sdk/source_code/${myprojectpath}
+    --> make clean; make TOOLCHAIN_VERSION=6.4.0 OR make clean; make TOOLCHAIN_VERSION=10.2.1
+
+运行可获得使用方法提示, 将resource和prog_dla_simulator拷贝到customer下
+cd /customer
 ./prog_dla_simulator
 Usage: ./prog_dla_dla_simulator [-i] [-m] ([-c] [-f])
  -h, --help      show this help message and exit
@@ -35,10 +42,10 @@ Usage: ./prog_dla_dla_simulator [-i] [-m] ([-c] [-f])
 
 Ex:
 单输入RGB分类模型, invoke单张图片
-./prog_dla_dla_simulator -i img.jpg -m test_fixed.sim_sgsimg.img -c Classification --format RGB
+./prog_dla_simulator -m resource/ssd_mobilenet_v1_fixed.sim_sgsimg.img   -i resource/009962.bmp -c Detection -f RGB
 
 单输入RGB分类模型，遍历invoke图片目录100张图片
-./prog_dla_dla_simulator -i ./100_imgs_folder -m test_fixed.sim_sgsimg.img -c Classification --format RGB
+./prog_dla_simulator -i ./100_imgs_folder -m test_fixed.sim_sgsimg.img -c Classification --format RGB
 
 双输入RGB/YUV分类模型，invoke单张图片
-./prog_dla_dla_simulator -i ./img1.jpg,img2.jpg -m test_fixed.sim_sgsimg.img -c Classification --format RGB,YUV
+./prog_dla_simulator -i ./img1.jpg,img2.jpg -m test_fixed.sim_sgsimg.img -c Classification --format RGB,YUV

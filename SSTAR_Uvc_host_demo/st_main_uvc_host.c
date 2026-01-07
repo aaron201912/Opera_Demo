@@ -504,7 +504,7 @@ static MI_S32 St_VideoModuleInit(buffer_object_t *buf_obj)
             buf_obj->chn_port_info.eModId = E_MI_MODULE_ID_SCL;
             buf_obj->chn_port_info.u32DevId = 1;
             buf_obj->chn_port_info.u32ChnId = 0;
-            buf_obj->chn_port_info.u32PortId = 0;       
+            buf_obj->chn_port_info.u32PortId = 0;
             break;
 
         case V4L2_PIX_FMT_MJPEG:
@@ -543,7 +543,7 @@ static MI_S32 St_VideoModuleInit(buffer_object_t *buf_obj)
             buf_obj->chn_port_info.eModId = E_MI_MODULE_ID_VDEC;
             buf_obj->chn_port_info.u32DevId = 0;
             buf_obj->chn_port_info.u32ChnId = 0;
-            buf_obj->chn_port_info.u32PortId = 0; 
+            buf_obj->chn_port_info.u32PortId = 0;
             break;
 
         default:
@@ -773,7 +773,7 @@ void  int_buf_obj(Video_Handle_t *video_handle)
     _g_buf_obj[0].vdec_info.plane_type = MOPG;
     _g_buf_obj[0].connector_type = DRM_MODE_CONNECTOR_DPI;
     sstar_drm_getattr(&_g_buf_obj[0]);
-    
+
     _g_buf_obj[0].vdec_info.v_src_width = ALIGN_BACK(video_handle->video_info.width, ALIGN_NUM);
     _g_buf_obj[0].vdec_info.v_src_height = ALIGN_BACK(video_handle->video_info.height, ALIGN_NUM);
     _g_buf_obj[0].vdec_info.v_src_stride = _g_buf_obj[0].vdec_info.v_src_width;
@@ -817,9 +817,9 @@ static void *uvc_stream(void *arg)
         ret = St_VideoModuleInit(&_g_buf_obj[0]);
         if(ret != 0)
             pthread_exit(&ret);
-        creat_outport_dmabufallocator(&_g_buf_obj[0]);	
+        creat_outport_dmabufallocator(&_g_buf_obj[0]);
         pthread_create(&tid_enqueue_buf_thread, NULL, enqueue_buffer_loop, (void*)&_g_buf_obj[0]);
-        pthread_create(&tid_drm_buf_thread, NULL, drm_buffer_loop, (void*)&_g_buf_obj[0]);    
+        pthread_create(&tid_drm_buf_thread, NULL, drm_buffer_loop, (void*)&_g_buf_obj[0]);
     }
 
     ret = video_streamon(video_handle, g_buf_cnt);
@@ -881,7 +881,6 @@ static void *uvc_stream(void *arg)
     if(g_buf_handle_mode == BUF_HANDLE_MODE_MI)
     {
         _g_buf_obj[0].bExit = 1;
-        _g_buf_obj[0].bExit_second = 1;
         if(tid_drm_buf_thread)
         {
             pthread_join(tid_drm_buf_thread, NULL);
@@ -892,7 +891,7 @@ static void *uvc_stream(void *arg)
         }
         destory_dmabuf_queue(&_g_buf_obj[0]);
 		sstar_drm_deinit(&_g_buf_obj[0]);
-        ret = St_VideoModuleDeinit(video_handle);
+        ret = St_VideoModuleDeinit(&_g_buf_obj[0]);
         if(ret != 0)
             pthread_exit(&ret);
         if(_g_drm_flag == 1)
@@ -1175,7 +1174,7 @@ int main(int argc, char **argv)
             return -1;
 
         if(g_run_mode & VS_MODE)
-        {               
+        {
             pthread_create(&vs_tid, NULL, uvc_stream, &video_handle);
         }
         if(g_run_mode & VC_MODE)

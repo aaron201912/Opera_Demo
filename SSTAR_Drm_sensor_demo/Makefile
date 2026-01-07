@@ -1,7 +1,7 @@
 #TOOLCHAIN_VERSION=10.2.1
-TOOLCHAIN_VERSION =6.4.0
-CHIP ?=SSD2386
-ENABLE_LDC=0
+TOOLCHAIN_VERSION ?= 6.4.0
+CHIP ?= SSD2386
+ENABLE_LDC ?= 0
 
 CC  = $(CROSS_COMPILE)gcc
 CPP = $(CROSS_COMPILE)g++
@@ -18,8 +18,8 @@ COM_FLAGS = -Wall -g -fPIC
 C_FLAGS  = $(COM_FLAGS) -std=gnu11
 CPP_FLAGS  = $(COM_FLAGS) -std=gnu++11
 
-INCLUDES  := -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include -I$(ALKAID_PATH)/project/release/include/isp -I$(ALKAID_PATH)/project/release/include/isp/opera -I./include -I$(ALKAID_PATH)/project/release/include/ipu/opera 
-INCLUDES  += -I./common  -I./drm -I./drm/libdrm -I./sensor -I./rgn -I./algo -I./scl -I./venc
+INCLUDES  := -I./common  -I./drm -I./drm/libdrm -I./sensor -I./rgn -I./algo -I./scl -I./venc
+INCLUDES  += -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include -I$(ALKAID_PATH)/project/release/include/isp -I$(ALKAID_PATH)/project/release/include/isp/opera -I./include -I$(ALKAID_PATH)/project/release/include/ipu/opera
 
 TARGET_NAME  := Drm_sensor_demo
 
@@ -66,10 +66,10 @@ CPP_FLAGS += -DENABLE_LDC
 LIB_NAME += -lgles_ldc -lmali -lEGL -lGLESv1_CM -lGLESv2
 INCLUDES  += -I./ldc
 ifeq ($(TOOLCHAIN_VERSION),10.2.1)
-LIB_PATH  := -L./lib/lib_64/ldclib
+LIB_PATH  += -L./lib/lib_64/ldclib
 endif
 ifeq ($(TOOLCHAIN_VERSION),6.4.0)
-LIB_PATH  := -L./lib/lib_32/ldclib
+LIB_PATH  += -L./lib/lib_32/ldclib
 endif
 LIB_PATH += -L$(ALKAID_PATH)/project/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/3rd_party_libs/dynamic
 endif
@@ -107,8 +107,8 @@ $(TARGET_NAME): $(CPP_OBJS) $(CPP_SRCS) $(C_OBJS) $(C_SRCS)
 
 %.c.o : %.c
 	@echo "compile $@"
-	@$(CC) $(C_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@
+	@$(CC) -DENABLE_HDMI=$(ENABLE_HDMI)  $(C_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@
 
 %.cpp.o : %.cpp
 	@echo "compile $@"
-	@$(CPP) $(CPP_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@
+	@$(CPP) -DENABLE_HDMI=$(ENABLE_HDMI)  $(CPP_FLAGS) $(INCLUDES) $(DEFINES) -g -c $< -o $@

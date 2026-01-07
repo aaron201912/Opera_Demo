@@ -41,6 +41,7 @@ LIBS += -lmi_disp
 LIBS += -lmi_hdmi
 LIBS += -lmi_hvp
 LIBS += -lmi_hdmirx  -lmi_isp -lmi_vif -lmi_sensor -lmi_iqserver
+LIBS += -ladecoder_helper -lmi_hdmicec -lhdmi_cec
 
 ifeq ($(INTERFACE_CUS3A), enable)
 LIBS += -lcus3a -lispalgo
@@ -49,7 +50,8 @@ endif
 LIBS += -L$(ALKAID_PATH)/release/chip/p5/dispcam/common/glibc/6.4.0/3rd_party_libs/dynamic
 LIBS += -lmali -lEGL -lGLESv1_CM -lGLESv2
 
-LIBS += -L./lib
+LIBS += -L./lib -Wl,-rpath-link,./lib
+
 LIBS += -lgpugfx -lhdmiplayer -laudio_usage
 LIBS += -ldrm
 

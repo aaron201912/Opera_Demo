@@ -499,6 +499,7 @@ void* drm_buffer_loop(void* param)
     MI_SYS_CloseFd(&buf_obj->_g_mi_sys_fd);
     printf("Thread drm_buffer_loop exit \n");
 	buf_obj->bExit_second = 1;
+    sem_post(&buf_obj->sem_avail);
     return (void*)0;
 }
 
@@ -725,7 +726,7 @@ error:
 	return NULL;
 }
 
-void sort_plane_type(int fd, int crtc_idx) 
+void sort_plane_type(int fd, int crtc_idx)
 {
     drmModePlaneResPtr plane_res;
     drmModePlanePtr plane_prt;
@@ -838,14 +839,14 @@ static int modeset_create_fb(buffer_object_t *bo)
         create.width = bo->width;
         create.height = bo->height*3/2;
         create.bpp = 8; //nv12
-    } 
-	
+    }
+
     ret = drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create);//创建gem_object，并分配物理内存,并返回handle，该handle可以找到对应的gem_object
 	if (ret) {
 		printf("DRM_IOCTL_MODE_CREATE_DUMB fail fd %d ret %d w %d h %d \n", fd, ret, create.width, create.height);
 		return -1;
 	}
-	
+
 	/* bind the dumb-buffer to an FB object */
 	bo->pitch = create.pitch;
 	bo->size = create.size;
@@ -875,7 +876,7 @@ static int modeset_create_fb(buffer_object_t *bo)
     }
 
 	printf("add fb,fd=%d size=0x%x ret=%d format=%d rgb=%d nv12=%d\n", bo->fb_id_0, bo->size, ret, bo->format, DRM_FORMAT_ARGB8888,DRM_FORMAT_NV12);
-	
+
 	/* map the dumb-buffer to userspace */
 	map.handle = create.handle;
 	drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map);//获取map.offset
@@ -915,7 +916,7 @@ static int modeset_create_fb(buffer_object_t *bo)
     }
 
 	printf("add fb,fd=%d size=0x%x ret=%d format=%d rgb=%d nv12=%d\n", bo->fb_id_1, bo->size, ret, bo->format, DRM_FORMAT_ARGB8888,DRM_FORMAT_NV12);
-	
+
 	/* map the dumb-buffer to userspace */
 	map.handle = create.handle;
 	drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map);//获取map.offset
@@ -1259,7 +1260,7 @@ static int drm_atomic_commit(buffer_object_t *bobj ,dma_info_t* dma_info) {
 		drmModeAtomicAddProperty(req, bobj->vdec_info.plane_id, prop_ids->CRTC_X, bobj->vdec_info.v_out_x);
         drmModeAtomicAddProperty(req, bobj->vdec_info.plane_id, prop_ids->CRTC_Y, bobj->vdec_info.v_out_y);
         drmModeAtomicAddProperty(req, bobj->vdec_info.plane_id, prop_ids->CRTC_W, bobj->width);
-        drmModeAtomicAddProperty(req, bobj->vdec_info.plane_id, prop_ids->CRTC_H, bobj->height);   
+        drmModeAtomicAddProperty(req, bobj->vdec_info.plane_id, prop_ids->CRTC_H, bobj->height);
         printf("CRTC_X = %d\n", bobj->vdec_info.v_out_x);
 		printf("CRTC_Y = %d\n", bobj->vdec_info.v_out_y);
         printf("CRTC_W = %d\n", bobj->width);
@@ -1273,7 +1274,7 @@ static int drm_atomic_commit(buffer_object_t *bobj ,dma_info_t* dma_info) {
 		printf("MODE_ID = %d\n", blob_id);
 		printf("FENCE_ID = %d\n", &bobj->vdec_info.out_fence);
 		printf("bobj->vdec_info.plane_id = %d\n", bobj->vdec_info.plane_id);
-		printf("bobj->vdec_info.plane_type = %d\n", bobj->vdec_info.plane_type);	
+		printf("bobj->vdec_info.plane_type = %d\n", bobj->vdec_info.plane_type);
         if(bobj->vdec_info.plane_type == MOPS)
         {
             if(bobj->hvp_realtime == 1)

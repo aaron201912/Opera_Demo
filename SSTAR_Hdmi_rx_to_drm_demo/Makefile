@@ -23,8 +23,8 @@ COM_FLAGS = -Wall -g -fPIC
 C_FLAGS  = $(COM_FLAGS) -std=gnu11
 CPP_FLAGS  = $(COM_FLAGS) -std=gnu++11
 
-INCLUDES  := -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include
-INCLUDES  += -I./common  -I./drm -I./drm/libdrm -I./sensor -I./rgn -I./algo -I./vdec -I./hdmi_rx
+INCLUDES  := -I./common  -I./drm -I./drm/libdrm -I./sensor -I./rgn -I./algo -I./vdec -I./hdmi_rx
+INCLUDES  += -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include
 
 TARGET_NAME  := sstar_hdmi_rx_to_drm
 
@@ -35,11 +35,11 @@ C_SRCS := $(foreach dir,$(dirs),$(wildcard $(dir)/*.c))
 C_OBJS := $(foreach n,$(C_SRCS),$(addsuffix .c.o,$(basename ${n})))
 
 ifeq ($(TOOLCHAIN_VERSION),10.2.1)
-LIB_PATH  := -L./lib/lib_64 
+LIB_PATH  := -L./lib/lib_64
 endif
 
 ifeq ($(TOOLCHAIN_VERSION),6.4.0)
-LIB_PATH  := -L./lib/lib_32 
+LIB_PATH  := -L./lib/lib_32
 endif
 
 LIB_PATH  += -L$(ALKAID_PATH)/project/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/mi_libs/dynamic

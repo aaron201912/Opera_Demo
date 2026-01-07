@@ -315,6 +315,12 @@ typedef struct AVIOContext {
      * Read-only statistic of bytes written for this AVIOContext.
      */
     int64_t bytes_written;
+
+    /**
+     * A callback that is used get handle.
+     * This is current internal only, do not use from outside.
+     */
+    int (*get_handle)(void *opaque);
 } AVIOContext;
 
 /**
@@ -517,6 +523,12 @@ int64_t avio_size(AVIOContext *s);
  * @return non zero if and only if at end of file or a read error happened when reading.
  */
 int avio_feof(AVIOContext *s);
+
+/**
+ * Get the file handler.
+ * @return file handler or AVERROR
+ */
+int avio_get_handler(AVIOContext *s);
 
 /**
  * Writes a formatted string to the context.

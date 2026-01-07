@@ -1,4 +1,18 @@
-//#include "utils.h"
+/* Sgs trade secret */
+/* Copyright (c) [2019~2020] Sgs Technology Ltd.
+All rights reserved.
+
+Unless otherwise stipulated in writing, any and all information contained
+herein regardless in any format shall remain the sole proprietary of
+Sgs and be kept in strict confidence
+(Sgs Confidential Information) by the recipient.
+Any unauthorized act including without limitation unauthorized disclosure,
+copying, use, reproduction, sale, distribution, modification, disassembling,
+reverse engineering and compiling of the contents of Sgs Confidential
+Information is unlawful and strictly prohibited. Sgs hereby reserves the
+rights to any and all damages, losses, costs and expenses resulting therefrom.
+*/
+
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -7,6 +21,8 @@
 #include <unistd.h>
 #include <signal.h>
 #include <assert.h>
+#include <ctype.h>
+#include <getopt.h>
 
 #include <libavutil/avutil.h>
 #include <libavutil/attributes.h>
@@ -15,133 +31,222 @@
 #include <libavutil/imgutils.h>
 #include <libavutil/samplefmt.h>
 #include <libavutil/timestamp.h>
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
 #include <libavutil/mathematics.h>
-#include <libswresample/swresample.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/common.h>
-#include <libavformat/avio.h>
 #include <libavutil/file.h>
+#include <libavutil/log.h>
+#include <libavutil/time.h>
+#include <libavformat/avformat.h>
+#include <libavformat/avio.h>
+#include <libavcodec/avcodec.h>
 #include <libswresample/swresample.h>
 
 #include <alloca.h>
 #include <alsa/asoundlib.h>
 
+/* ALSA Playback Volume */
 
-#define AVCODEC_MAX_AUDIO_FRAME_SIZE 192000
-#define PERIOD_SIZE 1024
-#define DECODE_TO_ALSA_BUF_LEN (PERIOD_SIZE * 128)
+#define DAC_VOL       "DAC_0"
+
+
+#define PERIOD_SIZE         (1024)
+#define WAV_SAMPLERATE      (44100)
+
+static inline int get_env_value(const char *str, int value)
+{
+    int i = 0;
+    int len = 0;
+    int tmp_value = value;
+
+    if (!str) {
+        return value;
+    }
+    const char *env_str = getenv(str);
+    if (!env_str) {
+        return value;
+    }
+    len = strlen(env_str);
+    if (len > 10) { // length of INT_MAX
+        return value;
+    }
+    for (i = 0; i < len; i++) {
+        if (!isdigit(env_str[i])) {
+            return value;
+        }
+    }
+    if (i == len) {
+        tmp_value = atoi(env_str);
+        if (tmp_value > ((int)(~0U>>1))) { // INT_MAX
+            return value;
+        }
+    }
+    return tmp_value;
+}
+
+/* For debug log */
+typedef enum {
+    LOG_LEVEL_N = 0,
+    LOG_LEVEL_E,
+    LOG_LEVEL_W,
+    LOG_LEVEL_I,
+    LOG_LEVEL_D,
+    LOG_LEVEL_V,
+} loglevel_e;
+
+#define player_logd(fmt, args...)                                                       \
+    do {                                                                                \
+        if (get_env_value("debug_player_log_level", LOG_LEVEL_W) >= LOG_LEVEL_D) {      \
+            av_log(NULL, AV_LOG_INFO, "[%s %d] " fmt, __FUNCTION__, __LINE__, ##args);  \
+        }                                                                               \
+    } while (0)
+
+#define player_logi(fmt, args...)                                                       \
+    do {                                                                                \
+        if (get_env_value("debug_player_log_level", LOG_LEVEL_W) >= LOG_LEVEL_I) {      \
+            av_log(NULL, AV_LOG_INFO, "[%s %d] " fmt, __FUNCTION__, __LINE__, ##args);  \
+        }                                                                               \
+    } while (0)
+
+#define player_logw(fmt, args...)                                                         \
+    do {                                                                                  \
+        if (get_env_value("debug_player_log_level", LOG_LEVEL_W) >= LOG_LEVEL_W) {        \
+            av_log(NULL, AV_LOG_WARNING, "[%s %d] " fmt, __FUNCTION__, __LINE__, ##args); \
+        }                                                                                 \
+    } while (0)
+
+#define player_loge(fmt, args...)                                                       \
+    do {                                                                                \
+        if (get_env_value("debug_player_log_level", LOG_LEVEL_W) >= LOG_LEVEL_E) {      \
+            av_log(NULL, AV_LOG_ERROR, "[%s %d] " fmt, __FUNCTION__, __LINE__, ##args); \
+        }                                                                               \
+    } while (0)
+
+/*************************************************************************************/
 
 #define DUMP_FILE
-#define WAV_SAMPLERATE                44100
-
-#define ExecFunc(result, value)\
-    if (result != value)\
-    {\
-        printf("[%s %d]exec function failed\n", __FUNCTION__, __LINE__);\
-        return -1;\
-    }\
-
-	
-typedef int QDateType; //队列存储数据类型
-
-typedef struct QueueNode //队列元素节点
-{
-	QDateType val;
-	struct QueueNode* next;
-}QueueNode;
-
-typedef	struct Queue //队列
-{
-	QueueNode* head;
-	QueueNode* tail;
-}Queue;
+#ifdef DUMP_FILE
 
 typedef struct {
-    int videoindex;
-    int sndindex;
-    AVFormatContext* pFormatCtx;
-    AVCodecContext* sndCodecCtx;
-    AVCodec* sndCodec;
-    SwrContext *swr_ctx;
-    DECLARE_ALIGNED(16,uint8_t,audio_buf) [AVCODEC_MAX_AUDIO_FRAME_SIZE * 4];
-}AudioState;
-
- //下面这四个结构体是为了分析wav头的
-typedef struct {
-    u_int magic;      /* 'RIFF' */
-    u_int length;     /* filelen */
-    u_int type;       /* 'WAVE' */
-} WaveHeader;
+    uint32_t magic;          // "RIFF"
+    uint32_t overall_size;   // 36 + data_size
+    uint32_t type;           // "WAVE"
+} WaveRIFFHeader;
 
 typedef struct {
-    u_short format;       /* see WAV_FMT_* */
-    u_short channels;
-    u_int sample_fq;      /* frequence of sample */
-    u_int byte_p_sec;
-    u_short byte_p_spl;   /* samplesize; 1 or 2 bytes */
-    u_short bit_p_spl;    /* 8, 12 or 16 bit */
-} WaveFmtBody;
+    uint32_t marker;                // "fmt "
+    uint32_t length;                // 16 for PCM
+    uint16_t format;                // PCM = 1
+    uint16_t channels;              // mono = 1, stereo = 2
+    uint32_t sample_rate;           // 44100, 16000, etc
+    uint32_t byte_rate;             // sample_rate * channels * bytes_per_sample
+    uint16_t block_align;           // channels * bytes_per_sample
+    uint16_t bits_per_sample;       // 8 bits = 8, 16 bits = 16, etc.
+} WaveFMTChunk;
 
 typedef struct {
-    u_int type;        /* 'data' */
-    u_int length;      /* samplecount */
-} WaveChunkHeader;
+    uint32_t type;      // "data"
+    uint32_t size;      // num_samples * channels * bytes_per_sample
+} WaveDATAChunk;
 
 #define COMPOSE_ID(a,b,c,d) ((a) | ((b)<<8) | ((c)<<16) | ((d)<<24))
-#define WAV_RIFF COMPOSE_ID('R','I','F','F')
-#define WAV_WAVE COMPOSE_ID('W','A','V','E')
-#define WAV_FMT COMPOSE_ID('f','m','t',' ')
-#define WAV_DATA COMPOSE_ID('d','a','t','a')
+#define WAV_RIFF    COMPOSE_ID('R','I','F','F')
+#define WAV_WAVE    COMPOSE_ID('W','A','V','E')
+#define WAV_FMT     COMPOSE_ID('f','m','t',' ')
+#define WAV_DATA    COMPOSE_ID('d','a','t','a')
 
-static bool g_bExit = false;
-static bool g_bPlayThreadRun = false;
-static bool g_bDecodeDone = false;
-static pthread_t g_playThread = 0;
-static int g_samplerate = 0; 
-int g_volume = 50;
-
-
-#ifdef DUMP_FILE
 static FILE *fp = NULL;
+static const char *dump_path = NULL;
+
+static int wave_insert_header(FILE* fp, long data_len, int sample_rate, int channels)
+{
+    WaveRIFFHeader riffHeader;
+    WaveFMTChunk fmtChunk;
+    WaveDATAChunk dataChunk;
+
+    riffHeader.magic = WAV_RIFF;
+    riffHeader.overall_size = sizeof(WaveRIFFHeader) + sizeof(WaveFMTChunk) + data_len;
+    riffHeader.type = WAV_WAVE;
+
+    uint32_t bits_per_sample = 16;
+    fmtChunk.marker = WAV_FMT;
+    fmtChunk.length = 16;
+    fmtChunk.format = 1;
+    fmtChunk.channels = channels;
+    fmtChunk.sample_rate = sample_rate;
+    fmtChunk.byte_rate = sample_rate * channels * bits_per_sample / 8;
+    fmtChunk.block_align = channels * bits_per_sample / 8;
+    fmtChunk.bits_per_sample = bits_per_sample;
+
+    dataChunk.type = WAV_DATA;
+    dataChunk.size = data_len;
+
+    fseek(fp, 0, SEEK_SET);
+    fwrite(&riffHeader, sizeof(WaveRIFFHeader), 1, fp);
+    fwrite(&fmtChunk, sizeof(WaveFMTChunk), 1, fp);
+    fwrite(&dataChunk, sizeof(WaveDATAChunk), 1, fp);
+
+    return 0;
+}
+
+static int wave_header_size(void)
+{
+    return sizeof(WaveRIFFHeader) + sizeof(WaveFMTChunk) + sizeof(WaveDATAChunk);
+}
 #endif
 
 typedef struct {
     snd_pcm_stream_t stream_type;
     snd_pcm_t *handle;
     snd_pcm_hw_params_t *params;
-	snd_pcm_sw_params_t *sw_params;
+    snd_pcm_sw_params_t *sw_params;
     snd_pcm_uframes_t period_count;
     snd_pcm_uframes_t period_frames;
-	snd_pcm_uframes_t start_threshold;
-	snd_pcm_uframes_t stop_threshold;
+    snd_pcm_uframes_t start_threshold;
+    snd_pcm_uframes_t stop_threshold;
     snd_pcm_access_t access_type;
     snd_pcm_format_t pcm_format;
     unsigned int sample_rate;
     char sample_size;
-    char chanel_size;
+    char channel_size;
     char frame_size;
-}alsa_init_type;
+    int  delay_timems;
+} alsa_init_type;
 
-alsa_init_type stAlsaInit;
+typedef struct {
+    int video_index;
+    int audio_index;
+    AVFormatContext* format_ctx;
+    AVCodecContext* codec_ctx;
+    const AVCodec* codec;
+    SwrContext *swr_ctx;
+    int sample_rate;
+    int volume;
+    pthread_t play_thread;
+    bool abort_request;
+} AudioState;
 
-int set_volume(long outvol)
+static bool bExit = false;
+static alsa_init_type stAlsaInit;
+static int write_total_size = 0;
+
+/***************************************************************************************/
+
+static int AppSetVolume(long outvol)
 {
     snd_mixer_t* handle;
     snd_mixer_elem_t* elem;
     snd_mixer_selem_id_t* sid;
 
-    static const char* mix_name = "DAC_0";
+    static const char* mix_name = DAC_VOL;
     static const char* card = "default";
 
-    if(outvol < 0 || outvol > 100)
-    {
-        printf("volume adjust range 0 ~ 100\n\r");
+    if(outvol < 0 || outvol > 100) {
+        player_logw("volume adjust range 0 ~ 100\n\r");
         return - 1;
     }
     outvol = outvol * 1023 / 100;
+    player_logi("set volume:%d\n", (int)outvol);
 
     snd_mixer_selem_id_alloca(&sid);
     //sets simple-mixer index and name
@@ -168,32 +273,31 @@ int set_volume(long outvol)
         snd_mixer_close(handle);
         return -5;
     }
-    if(snd_mixer_selem_set_playback_volume(elem, 0, outvol) < 0) {
+    if (snd_mixer_selem_set_playback_volume(elem, 0, outvol) < 0) {
         snd_mixer_close(handle);
         return -8;
     }
-    if(snd_mixer_selem_set_playback_volume(elem, 1, outvol) < 0) {
+    if (snd_mixer_selem_set_playback_volume(elem, 1, outvol) < 0) {
         snd_mixer_close(handle);
         return -9;
     }
 
     elem = snd_mixer_elem_next(elem);
-    if(snd_mixer_selem_set_playback_volume(elem, 0, outvol) < 0) {
+    if (snd_mixer_selem_set_playback_volume(elem, 0, outvol) < 0) {
         snd_mixer_close(handle);
         return -10;
     }
-    if(snd_mixer_selem_set_playback_volume(elem, 1, outvol) < 0) {
+    if (snd_mixer_selem_set_playback_volume(elem, 1, outvol) < 0) {
         snd_mixer_close(handle);
         return -11;
     }
 
-    printf("set volume\n\r");
     snd_mixer_close(handle);
     return 0;
 }
 
 //set control contents for one control
-int ao_dac_attach(char *value)
+static int AppAttachDev(char *value)
 {
     int   err = 0;
     char  card[64] = "hw:0";
@@ -205,40 +309,34 @@ int ao_dac_attach(char *value)
     snd_ctl_elem_id_alloca(&id);
     snd_ctl_elem_value_alloca(&control);
 
-    if(snd_ctl_ascii_elem_id_parse(id, "name=\'DAC_SEL\'"))
-    {
+    if (snd_ctl_ascii_elem_id_parse(id, "name=\'DAC_SEL\'")) {
         return -EINVAL;
     }
-    if(handle == NULL && (err = snd_ctl_open(&handle, card, 0)) < 0)
-    {
+    if (handle == NULL && (err = snd_ctl_open(&handle, card, 0)) < 0) {
         return err;
     }
 
     snd_ctl_elem_info_set_id(info, id);
-    if(err = snd_ctl_elem_info(handle, info) < 0)
-    {
+    if ((err = snd_ctl_elem_info(handle, info)) < 0) {
         snd_ctl_close(handle);
         handle = NULL;
         return err;
     }
     snd_ctl_elem_info_get_id(info, id);
     snd_ctl_elem_value_set_id(control, id);
-    if((err = snd_ctl_elem_read(handle, control)) < 0)
-    {
+    if ((err = snd_ctl_elem_read(handle, control)) < 0) {
         snd_ctl_close(handle);
         handle = NULL;
         return err;
     }
     err = snd_ctl_ascii_value_parse(handle, control, info, value);
-    if(err < 0)
-    {
+    if (err < 0) {
         snd_ctl_close(handle);
         handle = NULL;
         return err;
     }
 
-    if((err = snd_ctl_elem_write(handle, control)) < 0)
-    {
+    if ((err = snd_ctl_elem_write(handle, control)) < 0) {
         snd_ctl_close(handle);
         handle = NULL;
         return err;
@@ -250,12 +348,18 @@ int ao_dac_attach(char *value)
 
 }
 
-int AppPcmInit(alsa_init_type *stAlsaInit, char *snd_card_name)
+static int AppPcmInit(alsa_init_type *stAlsaInit, char *snd_card_name)
 {
     int err = 0;
     int dir = 0;
-    ao_dac_attach("0");
-    ao_dac_attach("1");
+
+    AppAttachDev("0");
+    AppAttachDev("1");
+
+    // wait for amp start
+    if (stAlsaInit->delay_timems > 0) {
+        usleep(stAlsaInit->delay_timems * 1000);
+    }
 
     /* Open PCM device for recording (playback). */
     err = snd_pcm_open(&stAlsaInit->handle, snd_card_name, stAlsaInit->stream_type, 0);
@@ -285,7 +389,8 @@ int AppPcmInit(alsa_init_type *stAlsaInit, char *snd_card_name)
         return err;
     }
     /* Two channels (stereo) */
-    err = snd_pcm_hw_params_set_channels(stAlsaInit->handle, stAlsaInit->params, stAlsaInit->chanel_size);
+
+    err = snd_pcm_hw_params_set_channels(stAlsaInit->handle, stAlsaInit->params, stAlsaInit->channel_size);
     if (err < 0) {
         fprintf(stderr, "Error in snd_pcm_hw_params_set_channels %s\n", snd_strerror(err));
         return err;
@@ -308,11 +413,11 @@ int AppPcmInit(alsa_init_type *stAlsaInit, char *snd_card_name)
         fprintf(stderr, "Error in snd_pcm_hw_params_set_period_size_near %s\n", snd_strerror(err));
         return err;
     }
-	err = snd_pcm_hw_params_set_periods_near(stAlsaInit->handle, stAlsaInit->params, &stAlsaInit->period_count, &dir);
+    err = snd_pcm_hw_params_set_periods_near(stAlsaInit->handle, stAlsaInit->params, (unsigned int*)&stAlsaInit->period_count, &dir);
     if (err < 0) {
         fprintf(stderr, "Error in snd_pcm_hw_params_set_periods_near %s\n", snd_strerror(err));
         return err;
-    }  
+    }
     /* Write the parameters to the driver */
     err = snd_pcm_hw_params(stAlsaInit->handle, stAlsaInit->params);
     if (err < 0) {
@@ -320,361 +425,439 @@ int AppPcmInit(alsa_init_type *stAlsaInit, char *snd_card_name)
             snd_strerror(err));
         return err;
     }
-	/* Allocate a software parameters object. */
-	snd_pcm_sw_params_alloca(&stAlsaInit->sw_params);
-	/* get current sw parameters */
-	err = snd_pcm_sw_params_current(stAlsaInit->handle, stAlsaInit->sw_params);
+    /* Allocate a software parameters object. */
+    snd_pcm_sw_params_alloca(&stAlsaInit->sw_params);
+    /* get current sw parameters */
+    err = snd_pcm_sw_params_current(stAlsaInit->handle, stAlsaInit->sw_params);
     if (err < 0) {
         fprintf(stderr, "unable to get sw snd_pcm_sw_params: %s\n",
             snd_strerror(err));
         return err;
     }
-	/* set waterline value */
-	err = snd_pcm_sw_params_set_start_threshold(stAlsaInit->handle, stAlsaInit->sw_params, stAlsaInit->start_threshold);
+    /* set waterline value */
+    err = snd_pcm_sw_params_set_start_threshold(stAlsaInit->handle, stAlsaInit->sw_params, stAlsaInit->start_threshold);
     if (err < 0) {
         fprintf(stderr, "unable to set sw snd_pcm_sw_params_set_start_threshold: %s\n",
             snd_strerror(err));
         return err;
-    }	
-	err = snd_pcm_sw_params_set_stop_threshold(stAlsaInit->handle, stAlsaInit->sw_params, stAlsaInit->stop_threshold);
+    }
+    err = snd_pcm_sw_params_set_stop_threshold(stAlsaInit->handle, stAlsaInit->sw_params, stAlsaInit->stop_threshold);
     if (err < 0) {
         fprintf(stderr, "unable to set sw snd_pcm_sw_params_set_stop_threshold: %s\n",
             snd_strerror(err));
         return err;
     }
-	/* Write the sw parameters to the driver */
+    /* Write the sw parameters to the driver */
     err = snd_pcm_sw_params(stAlsaInit->handle, stAlsaInit->sw_params);
     if (err < 0) {
         fprintf(stderr, "unable to set sw snd_pcm_sw_params: %s\n",
             snd_strerror(err));
         return err;
     }
-	
-    printf("----->System configure info\n");
-    printf("Alsa lib version %d.%d.%d\n", (SND_LIB_VERSION >> 16 & 0xff), (SND_LIB_VERSION >> 8 & 0xff), (SND_LIB_VERSION >> 0 & 0xff));
+
+    player_logi("Alsa lib version %d.%d.%d\n", (SND_LIB_VERSION >> 16 & 0xff), (SND_LIB_VERSION >> 8 & 0xff), (SND_LIB_VERSION >> 0 & 0xff));
     return err;
 }
 
-int AppPlayDataStream(snd_pcm_t* pst_handle, char* p_databuff, snd_pcm_uframes_t send_frames)
+static int AppPlayDataStream(snd_pcm_t* pst_handle, char* p_databuff, int data_size)
 {
-    int r = 0;
-    // printf("send_frames == %ld\n",send_frames);
-
-    r = snd_pcm_writei(pst_handle, p_databuff, send_frames);
-      if (r == -EPIPE)
-    {
+    int ret = 0;
+    snd_pcm_uframes_t send_frames = snd_pcm_bytes_to_frames(pst_handle, data_size);
+    write_total_size += data_size;
+    player_logd("send_frames=%d write_total_size=%d\n", (int)send_frames, write_total_size);
+    ret = snd_pcm_writei(pst_handle, p_databuff, send_frames);
+    if (ret == -EPIPE) {
         /* EPIPE means overrun */
         fprintf(stderr, "underrun occurred\n");
         snd_pcm_prepare(pst_handle);
     }
-    else if (r < 0)
-    {
-        fprintf(stderr, "error from write: %s\n", snd_strerror(r));
+    else if (ret < 0) {
+        fprintf(stderr, "error from write: %s\n", snd_strerror(ret));
     }
-    else if (r != (int)send_frames) {
-        fprintf(stderr, "short write, read %d frames\n", r);
+    else if (ret != (int)send_frames) {
+        fprintf(stderr, "short write, read %d frames\n", ret);
     }
-    return r;
+    return ret;
 }
 
-void AppTurnOffPcm(snd_pcm_t* pst_handle)
+static void AppTurnOffPcm(snd_pcm_t* pst_handle)
 {
-    printf("process end\n\r");
+    if (!pst_handle) {
+        player_loge("null handle!\n");
+        return;
+    }
     snd_pcm_drain(pst_handle);
     snd_pcm_close(pst_handle);
     snd_pcm_hw_free(pst_handle);
-    ao_dac_attach("0");
+    AppAttachDev("0");
 }
 
-
-int insert_wave_header(FILE* fp, long data_len, int sampleRate, int chnCnt)
+static void *mp3DecodeProc(void *param)
 {
-    int len;
-    WaveHeader* header;
-    WaveChunkHeader* chunk;
-    WaveFmtBody* body;
-
-    fseek(fp, 0, SEEK_SET);        //写到wav文件的开始处
-
-    len = sizeof(WaveHeader)+sizeof(WaveFmtBody)+sizeof(WaveChunkHeader)*2;
-    char* buf = (char*)malloc(len);
-    header = (WaveHeader*)buf;
-    header->magic = WAV_RIFF;
-    header->length = data_len + sizeof(WaveFmtBody)+sizeof(WaveChunkHeader)*2 + 4;
-    header->type = WAV_WAVE;
-
-    chunk = buf+sizeof(WaveHeader);
-    chunk->type = WAV_FMT;
-    chunk->length = 16;
-
-    body = (WaveFmtBody*)(buf+sizeof(WaveHeader)+sizeof(WaveChunkHeader));
-    body->format = (u_short)0x0001;              //编码方式为pcm
-    body->channels = (u_short)chnCnt;             //(u_short)0x02;      //声道数为2
-    body->sample_fq = sampleRate;                 //44100;             //采样频率为44.1k
-    body->byte_p_sec = sampleRate * chnCnt * 2;    //176400;           //每秒所需字节数 44100*2*2=采样频率*声道*采样位数
-    body->byte_p_spl = (u_short)0x4;             //对齐无意义
-    body->bit_p_spl = (u_short)16;               //采样位数16bit=2Byte
-
-
-    chunk = (WaveChunkHeader*)(buf+sizeof(WaveHeader)+sizeof(WaveChunkHeader)+sizeof(WaveFmtBody));
-    chunk->type = WAV_DATA;
-    chunk->length = data_len;
-
-    fwrite(buf, 1, len, fp);
-    free(buf);
-    return 0;
-}
-
-void *mp3DecodeProc(void *pParam)
-{
-    AudioState *is = (AudioState *)pParam;
-    AVPacket *packet = av_mallocz(sizeof(AVPacket));
+    AudioState *is = (AudioState *)param;
+    bool device_initialized = false;
+    bool flag_end_of_file = 0;
+    int ret = 0;
+    int data_size = 0;
+    int resample_count = 0;
+    bool format_same = true;
+    uint8_t **out_data = NULL;
+#ifdef DUMP_FILE
+    int fileDataSize = 0;
+#endif
+    AVPacket packet, *pkt = &packet;
     AVFrame *frame = av_frame_alloc();
-    uint8_t *out[] = { is->audio_buf };
-    int data_size = 0, got_frame = 0;
-    int wavDataLen = 0;
-	int wavDataSize = 0;
-	int SendDataSize = 0;
-#ifdef DUMP_FILE
-    int file_data_size = 0;
-#endif
-    static bool g_bPcmDevInit = false;
-	char * pbuffer = (char*)malloc(DECODE_TO_ALSA_BUF_LEN);
-	int buffer_head = 0;
-	int buffer_tail = 0;
+    if (!frame) {
+        player_loge("av_frame_alloc failed!\n");
+        return NULL;
+    }
 
-    while(g_bPlayThreadRun)    //1.2 循环读取mp3文件中的数据帧
-    {
-        if (av_read_frame(is->pFormatCtx, packet) < 0)
-            break;
-
-        if(packet->stream_index != is->sndindex)
-            continue;
-        if(avcodec_decode_audio4(is->sndCodecCtx, frame, &got_frame, packet) < 0) //1.3 解码数据帧
-        {
-            printf("file eof");
+    while (true) {
+        if (is->abort_request) {
             break;
         }
 
-        if(got_frame <= 0) /* No data yet, get more frames */
-            continue;
-        data_size = av_samples_get_buffer_size(NULL, is->sndCodecCtx->channels, frame->nb_samples, is->sndCodecCtx->sample_fmt, 1);
-
-        //1.4下面将ffmpeg解码后的数据帧转为我们需要的数据(关于"需要的数据"下面有解释)
-        if(NULL==is->swr_ctx)
-        {
-            if(is->swr_ctx != NULL)
-                swr_free(&is->swr_ctx);
-            printf("frame: channnels=%d,format=%d, sample_rate=%d\n", frame->channels, frame->format, frame->sample_rate);
-            is->swr_ctx = swr_alloc_set_opts(NULL, AV_CH_LAYOUT_STEREO, AV_SAMPLE_FMT_S16, WAV_SAMPLERATE, av_get_default_channel_layout(frame->channels), frame->format, frame->sample_rate, 0, NULL);
-            if(is->swr_ctx == NULL)
-            {
-                printf("swr_ctx == NULL");
+        if (!flag_end_of_file) {
+            // read audio packet from file
+            ret = av_read_frame(is->format_ctx, pkt);
+            if (ret < 0) {
+                if(ret == AVERROR_EOF) {
+                    flag_end_of_file = true;
+                    avcodec_flush_buffers(is->codec_ctx);
+                    player_logi("end of file!\n");
+                    continue;
+                } else {
+                    player_loge("av_read_frame error, ret:%s\n", av_err2str(ret));
+                    break;
+                }
             }
-            swr_init(is->swr_ctx);
+            if (pkt->stream_index != is->audio_index) {
+                continue;
+            }
+            // send packet to decoder and wait for decoding
+            ret = avcodec_send_packet(is->codec_ctx, pkt);
+            if(ret < 0) {
+                player_loge("avcodec_send_packet fail:%s\n", av_err2str(ret));
+                av_packet_unref(pkt);
+                continue;
+            }
+            av_packet_unref(pkt);
         }
-        wavDataLen = swr_convert(is->swr_ctx, out, WAV_SAMPLERATE, (const uint8_t **)frame->extended_data, frame->nb_samples);
-		//printf("wavDataLen = %d\n", wavDataLen);
-
-        if(g_bPcmDevInit == false)
-        {
-            printf("frame->nb_samples = %d, channnels=%d, format=%d, sample_rate=%d\n", frame->nb_samples, frame->channels, frame->format, frame->sample_rate);
-            printf("data_size = %d\n",data_size);
-            g_bPcmDevInit = true;
-            stAlsaInit.stream_type = SND_PCM_STREAM_PLAYBACK;
-            stAlsaInit.handle = NULL;
-            stAlsaInit.params = NULL;
-            stAlsaInit.sample_size = 2;
-            stAlsaInit.sample_rate = WAV_SAMPLERATE;
-            stAlsaInit.chanel_size = 2; 
-            stAlsaInit.access_type = SND_PCM_ACCESS_RW_INTERLEAVED;
-            stAlsaInit.pcm_format = SND_PCM_FORMAT_S16_LE;
-            stAlsaInit.period_frames = PERIOD_SIZE; 
-			stAlsaInit.period_count = 16; 
-			stAlsaInit.start_threshold = stAlsaInit.period_frames; 
-			stAlsaInit.stop_threshold = (stAlsaInit.period_count) * stAlsaInit.period_frames;
-            AppPcmInit(&stAlsaInit, "default");
-			SendDataSize = PERIOD_SIZE * stAlsaInit.period_count * sizeof(short) * stAlsaInit.chanel_size;
-            set_volume(g_volume);
+        // receive frame after decode done
+        ret = avcodec_receive_frame(is->codec_ctx, frame);
+        if (ret < 0) {
+            if (ret != AVERROR(EAGAIN)) {
+                player_loge("avcodec_receive_frame fail:%s\n", av_err2str(ret));
+                break;
+            }
+            if (flag_end_of_file) {
+                is->abort_request = true;
+                // wait alsa playback done
+                // max_alsa_cache = period_frames(1024) * period_count(16) = 16384(sampling points)
+                // max_alsa_playback_time = max_alsa_cache / sample_rate(44100) = 372ms
+                // therefore, you can wait for 1s(>372ms) to finish all the cached data
+                sleep(1);
+                player_logi("exit!\n");
+            }
+            continue;
         }
-		wavDataSize = wavDataLen * sizeof(short) * stAlsaInit.chanel_size;
-		
-		memcpy((void *)(pbuffer + buffer_tail), (void *)is->audio_buf, wavDataSize);
-		buffer_tail += wavDataLen * sizeof(short) * stAlsaInit.chanel_size;
 
-		while(buffer_tail - buffer_head > SendDataSize)
-		{
-			 AppPlayDataStream(stAlsaInit.handle, (char *)(pbuffer + buffer_head), PERIOD_SIZE * stAlsaInit.period_count); 
-			 buffer_head += SendDataSize;
-		}
-		if(buffer_head != 0)
-		{
-			memmove((void *)pbuffer, (void *)pbuffer + buffer_head, buffer_tail - buffer_head);
-			buffer_tail = buffer_tail - buffer_head;
-			buffer_head = 0;
-		}       
+        data_size = av_samples_get_buffer_size(NULL, is->codec_ctx->channels, frame->nb_samples, is->codec_ctx->sample_fmt, 1);
 
+        format_same = format_same && (av_get_default_channel_layout(frame->channels) == AV_CH_LAYOUT_STEREO) &&
+            (frame->format == AV_SAMPLE_FMT_S16) && (frame->sample_rate == WAV_SAMPLERATE);
+
+        // pcm data need to resample for audio output device
+        if (!is->swr_ctx && !format_same) {
+            player_logi("channnels=%d format=%d sample_rate=%d\n", frame->channels, frame->format, frame->sample_rate);
+            is->swr_ctx = swr_alloc_set_opts(NULL, AV_CH_LAYOUT_STEREO, AV_SAMPLE_FMT_S16, WAV_SAMPLERATE,
+                                             av_get_default_channel_layout(frame->channels),
+                                             frame->format, frame->sample_rate, 0, NULL);
+            if (!is->swr_ctx) {
+                player_loge("swr_alloc_set_opts failed!\n");
+                av_frame_free(&frame);
+                return NULL;
+            }
+            ret = swr_init(is->swr_ctx);
+            if (ret < 0) {
+                player_loge("swr_init failed!\n");
+                av_frame_free(&frame);
+                return NULL;
+            }
+        }
+        if (!format_same) {
+            int out_nb_samples = swr_get_out_samples(is->swr_ctx, frame->nb_samples);
+            int out_linesize;
+            av_samples_alloc_array_and_samples(&out_data, &out_linesize, AV_CH_LAYOUT_STEREO,
+                                      out_nb_samples, AV_SAMPLE_FMT_S16, 0);
+
+            resample_count = swr_convert(is->swr_ctx, out_data, WAV_SAMPLERATE, (const uint8_t **)frame->extended_data, frame->nb_samples);
+        }
+
+        if (!device_initialized) {
+            device_initialized = true;
+            stAlsaInit.stream_type      = SND_PCM_STREAM_PLAYBACK;
+            stAlsaInit.handle           = NULL;
+            stAlsaInit.params           = NULL;
+            stAlsaInit.sample_size      = 2;
+            stAlsaInit.sample_rate      = WAV_SAMPLERATE;
+            stAlsaInit.channel_size     = 2;
+            stAlsaInit.access_type      = SND_PCM_ACCESS_RW_INTERLEAVED;
+            stAlsaInit.pcm_format       = SND_PCM_FORMAT_S16_LE;
+            stAlsaInit.period_frames    = PERIOD_SIZE;
+            stAlsaInit.period_count     = 16;
+            stAlsaInit.start_threshold  = stAlsaInit.period_frames;
+            stAlsaInit.stop_threshold   = stAlsaInit.period_count * stAlsaInit.period_frames;
+            ret = AppPcmInit(&stAlsaInit, "default");
+            if (ret < 0) {
+                player_loge("alsa init failed!\n");
+                av_frame_free(&frame);
+                return NULL;
+            }
+            AppSetVolume(is->volume);
+        }
+        data_size = format_same ? data_size : snd_pcm_frames_to_bytes(stAlsaInit.handle, resample_count);
+        player_logd("resample_count=%d sample_rate=%d, origin nb_samples=%d sample_rate=%d, data_size:%d\n",
+                    resample_count, WAV_SAMPLERATE, frame->nb_samples, frame->sample_rate, data_size);
 #ifdef DUMP_FILE
-        file_data_size += wavDataLen;
-
-        //1.5 数据格式转换完成后就写到文件中
-        if (fp)
-            fwrite((short *)is->audio_buf, sizeof(short), (size_t) wavDataLen * 2, fp);
+        if (dump_path && strlen(dump_path) >= 1) {
+            fileDataSize += data_size;
+            //write pcm data to wav file
+            if (fp) {
+                fwrite(out_data[0], (size_t)data_size, 1, fp);
+            }
+        }
 #endif
+        AppPlayDataStream(stAlsaInit.handle, format_same ? (char*)frame->extended_data[0] : (char*)out_data[0], data_size);
+        if (!format_same && out_data) {
+            av_freep(&out_data[0]);
+            av_freep(&out_data);
+        }
+        av_frame_unref(frame);
     }
 
 #ifdef DUMP_FILE
-    file_data_size *= frame->channels * 2;            // 计算字节数,2chn & 16bits
-    printf("file_data_size=%d", file_data_size);
-    //第2步添加上wav的头
-    insert_wave_header(fp, file_data_size, WAV_SAMPLERATE, 2);
-    fclose(fp);
+    if (dump_path && strlen(dump_path) >= 1) {
+        player_logi("fileDataSize=%d\n", fileDataSize);
+        if (fp) {
+            wave_insert_header(fp, fileDataSize, WAV_SAMPLERATE, 2);
+            fclose(fp);
+        }
+    }
 #endif
 
-    if (is->swr_ctx != NULL)
+    if (is->swr_ctx != NULL) {
         swr_free(&is->swr_ctx);
-    av_free_packet(packet);
-    av_free(frame);
-    g_bDecodeDone = true;
+    }
+    av_frame_free(&frame);
 
     return NULL;
 }
 
-int init_ffplayer(AudioState* is, char* filepath)
+static int init_player(AudioState* is, const char* url, int volume)
 {
-    int i=0;
     int ret;
-    is->sndindex = -1;
 
-#ifdef DUMP_FILE
-    int wavHeaderLen = 0;
-#endif
-
-    if(NULL == filepath)
-    {
-        printf("input file is NULL");
+    if (!is || !url) {
+        player_loge("invalid input filepath!\n");
+        return -1;
+    }
+    memset(is, 0, sizeof(AudioState));
+    is->audio_index =
+    is->video_index = -1;
+    is->volume = volume;
+    is->format_ctx = avformat_alloc_context();
+    if (!is->format_ctx) {
+        player_loge("avformat_alloc_context failed!\n");
         return -1;
     }
 
-    avcodec_register_all();
-    //avfilter_register_all();
-    av_register_all();
-
-    is->pFormatCtx = avformat_alloc_context();
-
-    if(avformat_open_input(&is->pFormatCtx, filepath, NULL, NULL)!=0)
+    ret = avformat_open_input(&is->format_ctx, url, NULL, NULL);
+    if (ret < 0) {
+        player_loge("avformat_open_input failed, ret:%s\n", av_err2str(ret));
         return -1;
+    }
 
-    if(avformat_find_stream_info(is->pFormatCtx, NULL)<0)
+    ret = avformat_find_stream_info(is->format_ctx, NULL);
+    if(ret < 0) {
+        player_loge("avformat_find_stream_info failed, ret:%s\n", av_err2str(ret));
         return -1;
-    av_dump_format(is->pFormatCtx,0, 0, 0);
-    is->videoindex = av_find_best_stream(is->pFormatCtx, AVMEDIA_TYPE_VIDEO, is->videoindex, -1, NULL, 0);
-    is->sndindex = av_find_best_stream(is->pFormatCtx, AVMEDIA_TYPE_AUDIO,is->sndindex, is->videoindex, NULL, 0);
-    printf("videoindex=%d, sndindex=%d\n", is->videoindex, is->sndindex);
-    if(is->sndindex != -1)
-    {
-    	g_samplerate = is->pFormatCtx->streams[is->sndindex]->codec->sample_rate;
-		printf("g_samplerate = %d\n", g_samplerate);
-        is->sndCodecCtx = is->pFormatCtx->streams[is->sndindex]->codec;
-        is->sndCodec = avcodec_find_decoder(is->sndCodecCtx->codec_id);
-        if(is->sndCodec == NULL)
-        {
-            printf("Codec not found");
-            return -1;
+    }
+
+    av_dump_format(is->format_ctx, 0, url, 0);
+    is->video_index = av_find_best_stream(is->format_ctx, AVMEDIA_TYPE_VIDEO, is->video_index, -1, NULL, 0);
+    is->audio_index = av_find_best_stream(is->format_ctx, AVMEDIA_TYPE_AUDIO, is->audio_index, is->video_index, NULL, 0);
+    if (is->audio_index < 0) {
+        player_loge("don't find valid audio stream!\n");
+        return -1;
+    }
+    player_logi("video_index=%d, audio_index=%d\n", is->video_index, is->audio_index);
+
+    AVCodecParameters *codecpar = is->format_ctx->streams[is->audio_index]->codecpar;
+    is->sample_rate = codecpar->sample_rate;
+    player_logi("audio samplerate=%d\n", is->sample_rate);
+
+    is->codec = avcodec_find_decoder(codecpar->codec_id);
+    if(!is->codec) {
+        player_logw("don't found decoder, codec_id:%d\n", codecpar->codec_id);
+        return -1;
+    }
+
+    is->codec_ctx = avcodec_alloc_context3(is->codec);
+    if (!is->codec_ctx) {
+        player_loge("avcodec_alloc_context3 failed!\n");
+        return -1;
+    }
+
+    ret = avcodec_parameters_to_context(is->codec_ctx, codecpar);
+    if (ret < 0) {
+        player_loge("avcodec_parameters_to_context failed\n");
+        return -1;
+    }
+    is->codec_ctx->request_sample_fmt = AV_SAMPLE_FMT_S16;
+
+    ret = avcodec_open2(is->codec_ctx, is->codec, NULL);
+    if (ret < 0) {
+        player_loge("avcodec_open2 failed, ret:%s\n", av_err2str(ret));
+        return -1;
+    }
+
+#ifdef DUMP_FILE
+    if (!dump_path) {
+        dump_path = getenv("debug_player_dump_wav");
+    }
+    if (dump_path && strlen(dump_path) >= 1) {
+        char name[256];
+        memset(name, '\0', sizeof(name));
+        sprintf(name, "%s/test.wav", dump_path);
+        fp = fopen(name, "wb+");
+        if (fp) {
+            int wavHeaderLen = wave_header_size();
+            fseek(fp, wavHeaderLen, SEEK_SET);
+            player_logi("dump_path:%s wavHeaderLen=%d\n", dump_path, wavHeaderLen);
         }
-        if(avcodec_open2(is->sndCodecCtx, is->sndCodec, NULL) < 0)
-            return -1;
-    }
-
-#ifdef DUMP_FILE
-    fp = fopen("./test.wav", "wb+");
-    if (fp)
-    {
-        wavHeaderLen = sizeof(WaveHeader) + sizeof(WaveFmtBody) + sizeof(WaveChunkHeader) * 2;
-        fseek(fp, wavHeaderLen, SEEK_SET);
-        printf("wavHeaderLen=%d", wavHeaderLen);
     }
 #endif
 
-    g_bDecodeDone = false;
-    g_bPlayThreadRun = true;
-    ret = pthread_create(&g_playThread, NULL, mp3DecodeProc, (void *)is);
-    if (ret != 0)
-    {
-        printf("pthread_create mp3DecodeProc failed!\n");
+    is->abort_request = false;
+    ret = pthread_create(&is->play_thread, NULL, mp3DecodeProc, (void *)is);
+    if (ret != 0) {
+        player_loge("pthread_create mp3DecodeProc failed!\n");
+        return -1;
     }
+
     return 0;
 }
 
-void deinit_ffplayer(AudioState* is)
+static void deinit_player(AudioState* is)
 {
-    g_bPlayThreadRun = false;
-
-    if (g_playThread)
-    {
-        pthread_join(g_playThread, NULL);
-        g_playThread = NULL;
+    is->abort_request = true;
+    if (is->play_thread) {
+        pthread_join(is->play_thread, NULL);
     }
-
-    avcodec_close(is->sndCodecCtx);
-    avformat_close_input(&is->pFormatCtx);
+    if (is->codec_ctx) {
+        avcodec_free_context(&is->codec_ctx);
+    }
+    if (is->format_ctx) {
+        avformat_close_input(&is->format_ctx);
+    }
+    player_logi("close success!\n");
 }
 
-void signalHandler(int signo)
+static void signalHandler(int signal)
 {
-    switch (signo)
-    {
+    switch (signal) {
         case SIGINT:
             printf("catch exit signal\n");
-            g_bExit = true;
+            bExit = true;
             break;
         default:
             break;
     }
 }
 
+static void usage(const char* me) {
+    fprintf(stderr,
+            "usage: %s, eg:./mp3player -i [file] -v [volume]\n"
+            "\t\t[-i] set an input mp3 file\n"
+            "\t\t[-v] the audio playback volume, default is 50\n"
+            "\t\t[-d] set dump file path for debug, eg: -d /mnt\n"
+            "\t\t[-t] set alsa amp delay time(ms), default is 0\n",
+            me);
+    exit(1);
+}
+
 int main(int argc, char **argv)
 {
     int ret = 0;
-    AudioState* is = (AudioState*) av_mallocz(sizeof(AudioState));
+    const char *url = NULL;
+    int volume = 50;
+    const char* me = argv[0];
 
     signal(SIGINT, signalHandler);
 
-    if( (ret=init_ffplayer(is, argv[1])) != 0)
-    {
-        printf("init_ffmpeg error");
+    player_logi("ffmpeg library version:%s\n", av_version_info());
+
+    memset(&stAlsaInit, 0, sizeof(alsa_init_type));
+    while ((ret = getopt(argc, argv, "hi:v:d:t:")) >= 0) {
+        switch (ret) {
+            case 'i': {
+                url = optarg;
+                player_logi("set input url:%s\n", url);
+                break;
+            }
+            case 'v': {
+                volume = atoi(optarg);
+                player_logi("set volume:%d\n", volume);
+                break;
+            }
+            case 'd': {
+                dump_path = optarg;
+                player_logi("set dump_path:%s\n", dump_path);
+                break;
+            }
+            case 't': {
+                stAlsaInit.delay_timems = atoi(optarg);
+                player_logi("set amp delay time:%dms\n", stAlsaInit.delay_timems);
+                break;
+            }
+            case 'h':
+            default: {
+                usage(me);
+            }
+        }
+    }
+
+    argc -= optind;
+    argv += optind;
+    if (argc < 0) {
+        usage(me);
+    }
+
+    AudioState* is = (AudioState*)av_mallocz(sizeof(AudioState));
+    if (!is) {
+        player_loge("av_mallocz failed!\n");
+        return 0;
+    }
+
+    if ((ret = init_player(is, url, volume)) != 0) {
+        player_loge("init player error!\n");
         goto uninstall;
     }
 
-	if (argc < 2)
-    {
-        printf("please input a mp3 file!\n");
-        printf("eg: ./mp3Player [file] [volume] , the default volume is -10\n");
-        return -1;
-    }
-
-    if (argc > 2)
-    {
-        g_volume = atoi(argv[2]);
-    }
-
-
-    while (1)
-    {
-        if (g_bExit || g_bDecodeDone)
-        {
+    while (true) {
+        if (bExit || is->abort_request) {
             break;
         }
-
         usleep(30000);
     }
 
-    deinit_ffplayer(is);
-
 uninstall:
+    deinit_player(is);
     AppTurnOffPcm(stAlsaInit.handle);
 
     av_free(is);
+    player_logi("player exit success!\n");
 
     return 0;
 }

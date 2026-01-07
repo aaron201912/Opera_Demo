@@ -1,11 +1,17 @@
 ﻿dla_show_img_info用于生成IPU Log，结合IPU SDK中的分析工具使用，可以看到每层的性能耗时占比。
 
 编译说明：
-    a.修改makefile中的编译链为系统对应编译链，修改PROJ_ROOT路径	
-    b. make clean; make TOOLCHAIN_VERSION=6.4.0 或 make TOOLCHAIN_VERSION=10.2.1
+    a.修改makefile中的编译链为系统对应编译链
+
+    b.如果将demo放到跟project同级目录   （默认方式）
+    --> make clean; make TOOLCHAIN_VERSION=6.4.0 OR make clean; make TOOLCHAIN_VERSION=10.2.1
+
+    c.demo放置到任意路径，只需在make的时候指定PROJ_ROOT到SDK工程project的目录（需要链接SDK头文件）
+    --> declare -x PROJ_ROOT=~/sdk/source_code/${myprojectpath}
+    --> make clean; make TOOLCHAIN_VERSION=6.4.0 OR make clean; make TOOLCHAIN_VERSION=10.2.1
 
 运行可获得使用方法提示
- ./prog_dla_dla_show_img_info 
+ ./prog_dla_dla_show_img_info
 Usage: ./prog_dla_show_img_info  [-m PATH] ([--details_info])
  -h, --help      show this help message and exit
  -m, --model     path to model file
@@ -16,9 +22,12 @@ Usage: ./prog_dla_show_img_info  [-m PATH] ([--details_info])
                  path to save ipu log
      --ipu_log_size
                  size of ipu log (Default: 0x800000)
-	
+
 Ex:
-./prog_dla_dla_show_img_info -m sypfa5.480302_fixed.sim_sgsimg.img --ipu_log ./
+将resource和prog_dla_dla_show_img_info拷贝到customer下
+cd /customer
+./prog_dla_dla_show_img_info -m resource/syfdy2.48_V3.10S_20230506_fixed.sim_sgsimg.img
+MI_DEVICE_Connect: refcnt:1
 mi_ipu_datatype.h info:
 Max Input:      60
 Max Output:     60

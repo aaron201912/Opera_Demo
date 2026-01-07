@@ -237,7 +237,6 @@ void * sstar_video_thread(void* arg)
         if (s32Ret <= 0) {
 
             printf("GetAnnexbNALU: read nal data error\n");
-            fseek(fReadFile, 0, SEEK_SET);
             continue;
         }
 

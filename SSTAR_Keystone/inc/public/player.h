@@ -253,6 +253,12 @@ __attribute__((visibility("default"))) int mm_player_getduration(double *duratio
 __attribute__((visibility("default"))) int mm_player_set_volume(int volume);
 
 /**
+ * Set the audio volume in whole range.
+ * volume = [min]~[max], by hw spec
+ */
+__attribute__((visibility("default"))) int mm_player_set_volume2(int volume);
+
+/**
  * Mute the audio.
  * volumn = false/true
  */
@@ -274,9 +280,14 @@ __attribute__((visibility("default"))) int mm_player_set_window(int x, int y, in
  * mm_player_set_opts("audio_format", "", AV_PCM_FMT_S16); -- set audio format, such as: s16le
  * mm_player_set_opts("audio_channels", "", 2); -- set audio channel number, such as: 2
  * mm_player_set_opts("audio_samplerate", "", 48000); -- set audio sample rate, such as: 48000 44100
- * mm_player_set_opts("resolution", "921600", 0); -- set the max resolution of video, 921600 = 1280 x 720
+ * mm_player_set_opts("sound_card", "", 0); -- set audio card id, default:0
  * mm_player_set_opts("play_mode", "", AV_MODE_LOOP); -- set player mode, such as loop or once.
+ * mm_player_set_opts("video_bypass", "", 0); -- set bypass mode or user mode, if user want to get yuv, need to set false.
+ * mm_player_set_opts("audio_bypass", "", 0); -- set bypass mode or user mode, if user want to get pcm, need to set false.
  * mm_player_set_opts("spec_file_path", file_path, 0); -- set spec file path to check spec limitation.
+ * mm_player_set_opts("alsa_pcm_name", "your_dmix_name", 0); -- set alsa dmix config name, only for multi-process need to set
+ * mm_player_set_opts("disp_type", "drm", 0); -- set display device type, such as:drm,ttl,mipi,hdmi
+ * mm_player_set_opts("audio_device", "speaker", 0); -- set audio device type, such as:auto,speaker,spdif,headphone,hdmi-arc
  */
 __attribute__((visibility("default"))) int mm_player_set_opts(const char *key, const char *value, int flags);
 
@@ -296,6 +307,7 @@ __attribute__((visibility("default"))) int mm_player_set_dec_out_attr(int width,
  * AV_ROTATE_270  = 3
  * width: input rotate width
  * height: input rotate height
+ * NOTE: Play pause or play music album does not support rotation
  */
 __attribute__((visibility("default"))) int mm_player_set_rotate(int rotate, int width, int height);
 

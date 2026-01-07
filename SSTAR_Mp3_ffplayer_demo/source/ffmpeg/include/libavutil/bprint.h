@@ -22,6 +22,7 @@
 #define AVUTIL_BPRINT_H
 
 #include <stdarg.h>
+#include <../include/time.h>
 
 #include "attributes.h"
 #include "avstring.h"

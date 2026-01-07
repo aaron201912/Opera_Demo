@@ -48,8 +48,8 @@ MI_S32 sstar_scl_init(sstar_scl_info_t *scl_info)
 	stSclOutputParam.stSCLOutCropRect.u16Y = 0;
 	stSclOutputParam.stSCLOutCropRect.u16Width = 0;
 	stSclOutputParam.stSCLOutCropRect.u16Height = 0;
-	stSclOutputParam.stSCLOutputSize.u16Width = ALIGN_BACK(scl_info->scl_out_width, ALIGN_NUM);
-	stSclOutputParam.stSCLOutputSize.u16Height = ALIGN_BACK(scl_info->scl_out_height, ALIGN_NUM);
+	stSclOutputParam.stSCLOutputSize.u16Width = scl_info->scl_out_width;
+	stSclOutputParam.stSCLOutputSize.u16Height = scl_info->scl_out_height;
 	printf("SCL%d Crop.Width=%d CropRect.Height=%d Out.Width=%d Out.Height=%d\n", (int)scl_info->scl_dev_id, 
         stSclOutputParam.stSCLOutCropRect.u16Width, stSclOutputParam.stSCLOutCropRect.u16Height,
 		stSclOutputParam.stSCLOutputSize.u16Width, stSclOutputParam.stSCLOutputSize.u16Height);

@@ -16,9 +16,9 @@ void display_help(void)
 {
     printf("************************* sensor usage *************************\n");
     printf("-p : select sensor pad\n");
-	printf("-c : select panel type\n");
-	printf("-b : select iq file\n");    
-	printf("-r : rotate 0：NONE    1：90    2：180    3：270\n");
+	printf("-c : select panel type, ttl, mipi, lvds or hdmi\n");
+	printf("-b : select iq file\n");
+	printf("-r : select scl rotate, 0:NONE, 1:90,2:180, 3:270\n");
     printf("eg:./Algo_detect_sensor -p 0 -c ttl/mipi -b iqfile -r 1 \n");
 
     return;
@@ -46,7 +46,7 @@ int parse_arg(int argc, char **argv)
             {
                 if (optarg == NULL) {
 					printf("Missing panel type -c 'ttl or mipi' \n");
-				    break; 
+				    break;
 
 				}
 				printf("Missing panel type %s %d\n",optarg,strlen(optarg));
@@ -114,7 +114,7 @@ int parse_arg(int argc, char **argv)
     if (_g_buf_obj[0].connector_type == 0) {
 	    display_help();
 	    return DRM_FAIL;
-	}    
+	}
     return DRM_SUCCESS;
 }
 
@@ -142,7 +142,7 @@ void  int_buf_obj(int i)
     _g_buf_obj[i].face_detect = 1;
     _g_buf_obj[i].vdec_info.plane_type = MOPS;
     sstar_drm_getattr(&_g_buf_obj[i]);
-    
+
     _g_buf_obj[i].vdec_info.v_src_width = ALIGN_BACK(_g_buf_obj[i].width, ALIGN_NUM);
     _g_buf_obj[i].vdec_info.v_src_height = ALIGN_BACK(_g_buf_obj[i].height, ALIGN_NUM);
     _g_buf_obj[i].vdec_info.v_src_stride = _g_buf_obj[i].vdec_info.v_src_width;
@@ -223,11 +223,11 @@ int main(int argc, char **argv)
             _g_buf_obj[i].rgn_chn_port_info.eModId = E_MI_MODULE_ID_SCL;
             _g_buf_obj[i].rgn_chn_port_info.u32DevId = SensorAttr.u32SclDevId;
             _g_buf_obj[i].rgn_chn_port_info.u32ChnId = SensorAttr.u32SclChnId;
-            _g_buf_obj[i].rgn_chn_port_info.u32PortId = SensorAttr.u32SclOutPortId;          
+            _g_buf_obj[i].rgn_chn_port_info.u32PortId = SensorAttr.u32SclOutPortId;
             sstar_init_rgn(&_g_buf_obj[i]);
             sstar_algo_init(&_g_buf_obj[i]);
         }
-        creat_outport_dmabufallocator(&_g_buf_obj[i]);	
+        creat_outport_dmabufallocator(&_g_buf_obj[i]);
         pthread_create(&tid_enqueue_buf_thread[i], NULL, enqueue_buffer_loop, (void*)&_g_buf_obj[i]);
         #ifndef ENABLE_LDC
         pthread_create(&tid_drm_buf_thread[i], NULL, drm_buffer_loop, (void*)&_g_buf_obj[i]);
@@ -256,7 +256,7 @@ int main(int argc, char **argv)
         if(_g_buf_obj[i].face_detect)
         {
             sstar_algo_deinit();
-            sstar_deinit_rgn(&_g_buf_obj[i]);            
+            sstar_deinit_rgn(&_g_buf_obj[i]);
         }
         destroy_snr_pipeline(&_g_buf_obj[i]);
 		//destory_outport_dmabufallocator( &_g_buf_obj.chn_port_info);

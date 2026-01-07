@@ -10,7 +10,7 @@ CPP = $(CROSS_COMPILE)g++
 AR  = $(CROSS_COMPILE)ar
 
 ALKAID_PATH ?= ..
-INTERFACE_CUS3A = enable
+INTERFACE_CUS3A = disable
 dirs := ./ ./common
 dirs += ./drm ./rgn ./vdec
 OUTPUT_DIR := ./out
@@ -20,8 +20,8 @@ COM_FLAGS = -Wall -g -fPIC
 C_FLAGS  = $(COM_FLAGS) -std=gnu11
 CPP_FLAGS  = $(COM_FLAGS) -std=gnu++11
 
-INCLUDES  := -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include -I$(ALKAID_PATH)/project/release/include/isp -I$(ALKAID_PATH)/project/release/include/isp/opera -I./include -I$(ALKAID_PATH)/project/release/include/ipu/opera 
-INCLUDES  += -I./common  -I./drm -I./drm/libdrm -I./rgn -I./vdec
+INCLUDES  := -I./common  -I./drm -I./drm/libdrm -I./rgn -I./vdec
+INCLUDES  += -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include -I$(ALKAID_PATH)/project/release/include/isp -I$(ALKAID_PATH)/project/release/include/isp/opera -I./include -I$(ALKAID_PATH)/project/release/include/ipu/opera
 
 TARGET_NAME  := Drm_player
 
@@ -70,7 +70,7 @@ endif
 
 LIB_PATH  += -L$(ALKAID_PATH)/project/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/mi_libs/dynamic
 LIB_PATH  += -L$(ALKAID_PATH)/project/release/chip/p5/sigma_common_libs/glibc/$(TOOLCHAIN_VERSION)/dynamic/
-LIB_NAME := -lm -ldrm -lmi_vdec -lmi_isp -lmi_vif -lmi_sys -lmi_rgn -lmi_ipu -lmi_common -lsstar_algo -lsstar_algo_detection  -ldl -lcam_os_wrapper  -lcam_fs_wrapper -lpthread
+LIB_NAME := -lm -ldrm -lmi_vdec -lmi_sys -lmi_rgn -lmi_ipu -lmi_common -ldl -lcam_os_wrapper -lcam_fs_wrapper -lpthread
 #-lmi_hdmirx
 ifeq ($(INTERFACE_CUS3A), enable)
 LIB_NAME += -lcus3a -lispalgo

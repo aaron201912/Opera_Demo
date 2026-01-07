@@ -94,16 +94,16 @@ typedef struct{
     MI_U32 class_id;
 }ipu_rect;
 
-//global 
+//global
 
 MI_S32 create_device_callback(MI_IPU_DevAttr_t* stDevAttr, char *pFirmwarePath)
 {
-	return MI_IPU_CreateDevice(stDevAttr, NULL, pFirmwarePath, 0);
+    return MI_IPU_CreateDevice(stDevAttr, NULL, pFirmwarePath, 0);
 }
 
 void destory_device_callback()
 {
-	MI_IPU_DestroyDevice();
+    MI_IPU_DestroyDevice();
 }
 
 #if 0
@@ -112,26 +112,26 @@ std::vector<ipu_rect> bboxes;
 
 void detect_callback(std::vector<Box_t> results)
 {
-	bboxes.clear();
-	if(results.size())
-	{	
-		for(int i = 0; i < results.size(); i++)
-		{
-			printf("--->[%d] %d %f [x %d,y %d,w %d,h %d]\n", i, results[i].class_id, results[i].score, results[i].x, results[i].y, results[i].width, results[i].height);
-			
-			rectA.x = results[i].x;
-			rectA.y = results[i].y;
-			rectA.width = results[i].width;
-			rectA.height = results[i].height;
+    bboxes.clear();
+    if(results.size())
+    {
+        for(int i = 0; i < results.size(); i++)
+        {
+            printf("--->[%d] %d %f [x %d,y %d,w %d,h %d]\n", i, results[i].class_id, results[i].score, results[i].x, results[i].y, results[i].width, results[i].height);
+
+            rectA.x = results[i].x;
+            rectA.y = results[i].y;
+            rectA.width = results[i].width;
+            rectA.height = results[i].height;
             rectA.prob = results[i].score;
             rectA.class_id = results[i].class_id;
             bboxes.push_back(rectA);
-		}
-	}
-	else
-	{
-		std::cout<< "*********no results*******:\n" << std::endl;
-	}
+        }
+    }
+    else
+    {
+        std::cout<< "*********no results*******:\n" << std::endl;
+    }
 
 }
 #endif
@@ -159,18 +159,18 @@ void parse_images_dir(const std::string& base_path, std::vector<std::string>& fi
     closedir(dir);
 }
 
-DetectionInfo_t detection_info_yuv = 
+DetectionInfo_t detection_info_yuv =
 {
     "/config/dla/ipu_lfw.bin",
-    "/customer/res/syfdy2.48_V3.10S_20230506_fixed.sim_sgsimg.img",
+    "/customer/res/sdy48.img",
     0.4, //threshold
     {800, 480}, //转成显示的坐标
 };
 
-DetectionInfo_t detection_info_argb = 
+DetectionInfo_t detection_info_argb =
 {
     "/config/dla/ipu_lfw.bin",
-    "./sypfa5.480302_fixed.sim_sgsimg.img",
+    "/customer/res/sypfa5.480302_fixed.sim_sgsimg.img",
     0.4, //threshold
     {800, 480}, //转成显示的坐标
 };
@@ -178,27 +178,27 @@ DetectionInfo_t detection_info_argb =
 static float calcIOU(ipu_rect rectA1, ipu_rect rectB)
 {
 
-	if (rectA1.x > rectB.x + rectB.width) { return 0.; }
+    if (rectA1.x > rectB.x + rectB.width) { return 0.; }
 
-	if (rectA1.y > rectB.y + rectB.height) { return 0.; }
+    if (rectA1.y > rectB.y + rectB.height) { return 0.; }
 
-	if ((rectA1.x + rectA1.width) < rectB.x) { return 0.; }
+    if ((rectA1.x + rectA1.width) < rectB.x) { return 0.; }
 
-	if ((rectA1.y + rectA1.height) < rectB.y) { return 0.; }
+    if ((rectA1.y + rectA1.height) < rectB.y) { return 0.; }
 
-	float colInt = MIN(rectA1.x + rectA1.width, rectB.x + rectB.width) - MAX(rectA1.x, rectB.x);
+    float colInt = MIN(rectA1.x + rectA1.width, rectB.x + rectB.width) - MAX(rectA1.x, rectB.x);
 
-	float rowInt = MIN(rectA1.y + rectA1.height, rectB.y + rectB.height) - MAX(rectA1.y, rectB.y);
+    float rowInt = MIN(rectA1.y + rectA1.height, rectB.y + rectB.height) - MAX(rectA1.y, rectB.y);
 
-	float intersection = colInt * rowInt;
+    float intersection = colInt * rowInt;
 
-	float areaA = rectA1.width * rectA1.height;
+    float areaA = rectA1.width * rectA1.height;
 
-	float areaB = rectB.width * rectB.height;
+    float areaB = rectB.width * rectB.height;
 
-	float intersectionPercent = intersection / (areaA + areaB - intersection);
+    float intersectionPercent = intersection / (areaA + areaB - intersection);
 
-	return intersectionPercent;
+    return intersectionPercent;
 }
 
 MI_S32 vpe_OpenSourceFile(const char *pFileName, int *pSrcFd)
@@ -235,9 +235,9 @@ MI_S32 vpe_GetOneFrame(int srcFd, char *pData, int yuvSize)
     return 0;
 }
 
-static void Dump_Rawdata_Input(MI_IPU_TensorDesc_t* desc, PreProcessedData* pstPreProcessedData) {
+static void Dump_Rawdata_Input(MI_IPU_TensorDesc_t* desc, PreProcessedData* pstPreProcessedData)
+{
     std::ifstream ifs(pstPreProcessedData->pImagePath, std::ios::binary);
-    
     ifs.seekg(0, std::ios_base::end);
     if (ifs.tellg() != desc->s32AlignedBufSize)
     {
@@ -268,7 +268,7 @@ void OpenCV_Image(PreProcessedData* pstPreProcessedData)
 
     cv::Mat sample_resized;
     cv::Size inputSize = cv::Size(pstPreProcessedData->iResizeW, pstPreProcessedData->iResizeH);
-	
+
     if (img.size() != inputSize) {
         cv::resize(img, sample_resized, inputSize, 0, 0, cv::INTER_LINEAR);
     }
@@ -279,7 +279,8 @@ void OpenCV_Image(PreProcessedData* pstPreProcessedData)
     cv::Mat sample;
     int imageSize;
     int imageStride;
-    if (pstPreProcessedData->mFormat == "RGB") {
+    if (pstPreProcessedData->mFormat == "RGB")
+    {
         cv::cvtColor(sample_resized, sample, cv::COLOR_BGR2RGB);
         imageSize = pstPreProcessedData->iResizeH * pstPreProcessedData->iResizeW * 3;
         MI_U8* pSrc = sample.data;
@@ -288,19 +289,19 @@ void OpenCV_Image(PreProcessedData* pstPreProcessedData)
             *(pstPreProcessedData->pdata + i) = *(pSrc + i);
         }
     }
-    else if (pstPreProcessedData->mFormat == "BGRA") {
-        
+    else if (pstPreProcessedData->mFormat == "BGRA")
+    {
         cv::cvtColor(sample_resized, sample, cv::COLOR_BGR2BGRA);
         MI_U8* pSrc = sample.data;
         MI_U8* pVirsrc = pstPreProcessedData->pdata;
-		if(pVirsrc)
-		{
-			
-		}
-		else
-		{
-			exit(1);
-		}
+        if(pVirsrc)
+        {
+
+        }
+        else
+        {
+            exit(1);
+        }
         imageStride = ALIGN_UP(pstPreProcessedData->iResizeW * 4, DIVP_YUV_ALIGNMENT);
         imageSize = pstPreProcessedData->iResizeH * imageStride;
         for (int i = 0; i < pstPreProcessedData->iResizeH; i++) {
@@ -377,40 +378,43 @@ void renew_output() {
 
 void showUsage() {
     std::cout << "Usage: ./prog_dla_label_image --images  --input_format  --format " << std::endl;
-    std::cout << " -h, --help      show this help message and exit" << std::endl;
-    std::cout << " -i, --images    path to validation image or images' folder" << std::endl;
-	std::cout << " -s, --input_format      select data input image format: rgb / argb8888 / yuv, default=rgb" << std::endl;
-    std::cout << "     --format    model input format (Default is YUV_NV12):" << std::endl;
-    std::cout << "                 BGR / RGB / BGRA / RGBA / YUV_NV12 / GRAY / RAWDATA_S16_NHWC" << std::endl;
+    std::cout << " -h, --help, show this help message and exit" << std::endl;
+    std::cout << " -i, --images, path to validation image or images' folder" << std::endl;
+    std::cout << " -s, --input_format, select data input image format: rgb / argb8888 / yuv, default=rgb" << std::endl;
+    std::cout << "     --format, model input format (Default is YUV_NV12):" << std::endl;
+    std::cout << "     BGR / RGB / BGRA / RGBA / YUV_NV12 / GRAY / RAWDATA_S16_NHWC" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
-	//run  ./prog_dla_label_image --images ./images --input_format rgb
+    //run  ./prog_dla_label_image --images ./images --input_format rgb
     char* imagesPath = NULL;
-	char* labelsPath = NULL;
-	char* input_format = NULL;
+    char* labelsPath = NULL;
+    char* input_format = NULL;
     std::string mFormat;
     int opt;
     int lopt {0};
-    while (true) {
+    while (true)
+    {
         int option_index = 0;
         static struct option long_options[] =
         {
             {"images",        required_argument, 0,  'i' },
-			{"labels",        required_argument, 0,  'l' },
-			{"input_format",  required_argument, 0,  's' },
+            {"labels",        required_argument, 0,  'l' },
+            {"input_format",  required_argument, 0,  's' },
             {"help",          no_argument,       0,  'h' },
             {"format",        required_argument, 0,  'f' },
         };
         opt = getopt_long(argc, argv, "hi:m:c:", long_options, &option_index);
-        if (opt == -1) {
+        if (opt == -1)
+        {
             break;
         }
-        switch (opt) {
+        switch (opt)
+        {
             case 'i':
                 imagesPath = optarg;
                 break;
-			case 's':
+            case 's':
                 input_format = optarg;
                 break;
             case 'f':
@@ -424,29 +428,33 @@ int main(int argc, char* argv[]) {
                 return 0;
         }
     }
-    if (imagesPath == NULL) {
+    if (imagesPath == NULL)
+    {
         std::cout <<  "if (imagesPath == NULL) { "<< std::endl;
         showUsage();
         return 0;
     }
-	if (input_format == NULL) {
+    if (input_format == NULL)
+    {
         std::cout <<  "if (input_format == NULL) { "<< std::endl;
         input_format = "rgb";
     }
-	if (mFormat.empty()) {
+    if (mFormat.empty())
+    {
         mFormat = "YUV_NV12";
     }
     else if ((mFormat != "BGR") && (mFormat != "RGB") && (mFormat != "BGRA") && (mFormat != "RGBA") &&
-            (mFormat != "YUV_NV12") && (mFormat != "GRAY") && (mFormat != "RAWDATA_S16_NHWC")) {
+            (mFormat != "YUV_NV12") && (mFormat != "GRAY") && (mFormat != "RAWDATA_S16_NHWC"))
+    {
         std::cout << "model input format only support `BGR / RGB / BGRA / RGBA / YUV_NV12 / GRAY / RAWDATA_S16_NHWC`" << std::endl;
         return 0;
     }
-	MI_SYS_Init(0);
+    MI_SYS_Init(0);
     MI_U32 u32ChannelID;
     MI_IPU_SubNet_InputOutputDesc_t desc;
 
-	// set threshold
-	const size_t num_threshold = 11;
+    // set threshold
+    const size_t num_threshold = 11;
     float thresholds[num_threshold];
     for (int i_threshold = 1; i_threshold < num_threshold - 1; i_threshold++)
     {
@@ -461,131 +469,136 @@ int main(int argc, char* argv[]) {
     int g_FP_nums[num_threshold] = {0};
     int g_FN_nums[num_threshold] = {0};
     char c;
-	
-	// set image input 
-	int src_fd;
-	MI_S32 s32Ret;
-	std::string foldername {imagesPath};
-	std::vector<std::string> images;
-	parse_images_dir(foldername, images);
-    std::cout << "found " << images.size() << " images!" << std::endl;
-	
-	// set pVirAddr
-	MI_SYS_BufInfo_t stBufInfo;
-	memset(&stBufInfo, 0x0, sizeof(MI_SYS_BufInfo_t));
-	
-	MI_S32 ret = MI_SUCCESS;
-	MI_U16 u16SocId = ST_DEFAULT_SOC_ID;
-	MI_U32 srcBuffSize = 800*480*4;
-	MI_PHY phySrcBufAddr = 0;
-	void *pVirSrcBufAddr = NULL;
-	ipu_rect rectC;
-	float iou = 0.0;
 
-	std::vector<float> values;
-	
-	ret = MI_SYS_MMA_Alloc(u16SocId, NULL, srcBuffSize, &phySrcBufAddr);
-	if(ret != MI_SUCCESS)
-	{
-		printf("alloc src buff failed\n");
-		return -1;
-	}
-	ret = MI_SYS_Mmap(phySrcBufAddr, srcBuffSize, &pVirSrcBufAddr, TRUE);
-	if(ret != MI_SUCCESS)
-	{
-		printf("mmap src buff failed\n");
-		return -1;
-	}
-	memset(pVirSrcBufAddr, 0, srcBuffSize);
-	
-	// enter sdk
+    // set image input
+    int src_fd;
+    MI_S32 s32Ret;
+    std::string foldername {imagesPath};
+    std::vector<std::string> images;
+    parse_images_dir(foldername, images);
+    std::cout << "found " << images.size() << " images!" << std::endl;
+
+    // set pVirAddr
+    MI_SYS_BufInfo_t stBufInfo;
+    memset(&stBufInfo, 0x0, sizeof(MI_SYS_BufInfo_t));
+
+    MI_S32 ret = MI_SUCCESS;
+    MI_U16 u16SocId = ST_DEFAULT_SOC_ID;
+    MI_U32 srcBuffSize = 800 * 480 * 4;
+    MI_PHY phySrcBufAddr = 0;
+    void *pVirSrcBufAddr = NULL;
+    ipu_rect rectC;
+    float iou = 0.0;
+
+    std::vector<float> values;
+
+    srcBuffSize = ALIGN_UP(srcBuffSize, 4096);
+    ret = MI_SYS_MMA_Alloc(u16SocId, NULL, srcBuffSize, &phySrcBufAddr);
+    if(ret != MI_SUCCESS)
+    {
+        printf("alloc src buff failed\n");
+        return -1;
+    }
+    ret = MI_SYS_Mmap(phySrcBufAddr, srcBuffSize, &pVirSrcBufAddr, TRUE);
+    if(ret != MI_SUCCESS)
+    {
+        printf("mmap src buff failed ret %x\n", ret);
+        return -1;
+    }
+    memset(pVirSrcBufAddr, 0, srcBuffSize);
+
+    // enter sdk
     MI_IPU_DevAttr_t stIpuDevAttr;
     memset(&stIpuDevAttr, 0x0, sizeof(MI_IPU_DevAttr_t));
     stIpuDevAttr.u32MaxVariableBufSize = 800 * 480 * 4;
-    create_device_callback(&stIpuDevAttr, detection_info_argb.ipu_firmware_path);
-	ALGO_DET_CreateHandle(&manager);
-	if(mFormat == "BGRA"){
-		ALGO_DET_InitHandle(manager, &detection_info_argb);
+    if(mFormat == "BGRA")
+    {
+        create_device_callback(&stIpuDevAttr, detection_info_argb.ipu_firmware_path);
+        ALGO_DET_CreateHandle(&manager);
+        ALGO_DET_InitHandle(manager, &detection_info_argb);
         printf("the input format is BGRA \n");
-	}
-	else{
-		ALGO_DET_InitHandle(manager, &detection_info_yuv);
+    }
+    else if(mFormat == "YUV_NV12")
+    {
+        create_device_callback(&stIpuDevAttr, detection_info_yuv.ipu_firmware_path);
+        ALGO_DET_CreateHandle(&manager);
+        ALGO_DET_InitHandle(manager, &detection_info_yuv);
         printf("the input format is YUV_NV12 \n");
-	}
-	//startDetect(manager);
-	
-	PreProcessedData stProcessedData;
-	stProcessedData.iResizeH = 480;
-	stProcessedData.iResizeW = 800;
-	stProcessedData.iResizeC = 4;
-	stProcessedData.mFormat = mFormat;
-	stProcessedData.pdata =(MI_U8 *) pVirSrcBufAddr;
+    }
+    //startDetect(manager);
+
+    PreProcessedData stProcessedData;
+    stProcessedData.iResizeH = 480;
+    stProcessedData.iResizeW = 800;
+    stProcessedData.iResizeC = 4;
+    stProcessedData.mFormat = mFormat;
+    stProcessedData.pdata =(MI_U8 *) pVirSrcBufAddr;
 
     std::string time_str = std::to_string(long(time(0)));
-	for (int idx = 0; idx < images.size(); idx++) 
-	{
-        
-            cv::Mat src;
-            if(0 == strcmp(input_format, "rgb")){
-                stProcessedData.pImagePath = images[idx];
-                printf("the image path is %s \n",stProcessedData.pImagePath.c_str());
-                OpenCV_Image(&stProcessedData);
-                stBufInfo.stFrameData.u32BufSize = srcBuffSize;
-                stBufInfo.stFrameData.pVirAddr[0] = pVirSrcBufAddr;
-                stBufInfo.stFrameData.phyAddr[0] = phySrcBufAddr;
-                stBufInfo.eBufType = E_MI_SYS_BUFDATA_FRAME;
-                src = cv::imread(images[idx]);
-    
-                
+    for (int idx = 0; idx < images.size(); idx++)
+    {
+        cv::Mat src;
+        if(0 == strcmp(input_format, "rgb"))
+        {
+            stProcessedData.pImagePath = images[idx];
+            printf("the image path is %s \n",stProcessedData.pImagePath.c_str());
+            OpenCV_Image(&stProcessedData);
+            stBufInfo.stFrameData.u32BufSize = srcBuffSize;
+            stBufInfo.stFrameData.pVirAddr[0] = pVirSrcBufAddr;
+            stBufInfo.stFrameData.phyAddr[0] = phySrcBufAddr;
+            stBufInfo.eBufType = E_MI_SYS_BUFDATA_FRAME;
+            src = cv::imread(images[idx]);
+        }
+        else if(0 == strcmp(input_format, "argb8888"))
+        {
+            s32Ret = vpe_OpenSourceFile(images[idx].c_str(), &src_fd);
+            if(s32Ret < 0)
+            {
+                printf("!!!!!!!!!open file[%s] fail\n", images[idx].c_str());
+                continue;
             }
-            else if(0 == strcmp(input_format, "argb8888")){
-                s32Ret = vpe_OpenSourceFile(images[idx].c_str(), &src_fd);
-                if(s32Ret < 0)
-                {
-                    printf("!!!!!!!!!open file[%s] fail\n", images[idx].c_str());
-                    continue;
-                }
 
-                std::cout  << "[" << idx << "] " << "processing " << images[idx] << std::endl;
+            std::cout  << "[" << idx << "] " << "processing " << images[idx] << std::endl;
 
-                vpe_GetOneFrame(src_fd, (char *)pVirSrcBufAddr, srcBuffSize);
-                close(src_fd);
-                MI_SYS_FlushInvCache(pVirSrcBufAddr, srcBuffSize);
-                stBufInfo.eBufType					= E_MI_SYS_BUFDATA_FRAME;
-                stBufInfo.stFrameData.u16Width 		= 800;
-                stBufInfo.stFrameData.u16Height		= 480;
-                stBufInfo.stFrameData.pVirAddr[0]	= pVirSrcBufAddr;
-                stBufInfo.stFrameData.phyAddr[0]	= phySrcBufAddr;
-                stBufInfo.stFrameData.u32BufSize	= srcBuffSize;
-                
-                cv::Mat srcMat(480, 800 , CV_8UC4, (unsigned char *)stBufInfo.stFrameData.pVirAddr[0]);
-                src = srcMat;
+            vpe_GetOneFrame(src_fd, (char *)pVirSrcBufAddr, srcBuffSize);
+            close(src_fd);
+            MI_SYS_FlushInvCache(pVirSrcBufAddr, srcBuffSize);
+            stBufInfo.eBufType                  = E_MI_SYS_BUFDATA_FRAME;
+            stBufInfo.stFrameData.u16Width      = 800;
+            stBufInfo.stFrameData.u16Height     = 480;
+            stBufInfo.stFrameData.pVirAddr[0]   = pVirSrcBufAddr;
+            stBufInfo.stFrameData.phyAddr[0]    = phySrcBufAddr;
+            stBufInfo.stFrameData.u32BufSize    = srcBuffSize;
+
+            cv::Mat srcMat(480, 800 , CV_8UC4, (unsigned char *)stBufInfo.stFrameData.pVirAddr[0]);
+            src = srcMat;
+        }
+        else
+        {
+            s32Ret = vpe_OpenSourceFile(images[idx].c_str(), &src_fd);
+            if(s32Ret < 0)
+            {
+                printf("!!!!!!!!!open file[%s] fail\n", images[idx].c_str());
+                continue;
             }
-            else{
-                s32Ret = vpe_OpenSourceFile(images[idx].c_str(), &src_fd);
-                if(s32Ret < 0)
-                {
-                    printf("!!!!!!!!!open file[%s] fail\n", images[idx].c_str());
-                    continue;
-                }
-                printf("---enter here\n");
-                vpe_GetOneFrame(src_fd, (char *)pVirSrcBufAddr, srcBuffSize);
-                stBufInfo.eBufType					= E_MI_SYS_BUFDATA_FRAME;
-                stBufInfo.stFrameData.u16Width 		= 800;
-                stBufInfo.stFrameData.u16Height		= 480;
-                stBufInfo.stFrameData.pVirAddr[0]	= pVirSrcBufAddr;
-                stBufInfo.stFrameData.phyAddr[0]	= phySrcBufAddr;
-                stBufInfo.stFrameData.u32BufSize	= srcBuffSize;
-                close(src_fd);
+            printf("---enter here\n");
+            vpe_GetOneFrame(src_fd, (char *)pVirSrcBufAddr, srcBuffSize);
+            stBufInfo.eBufType                  = E_MI_SYS_BUFDATA_FRAME;
+            stBufInfo.stFrameData.u16Width      = 800;
+            stBufInfo.stFrameData.u16Height     = 480;
+            stBufInfo.stFrameData.pVirAddr[0]   = pVirSrcBufAddr;
+            stBufInfo.stFrameData.phyAddr[0]    = phySrcBufAddr;
+            stBufInfo.stFrameData.u32BufSize    = srcBuffSize;
+            close(src_fd);
 
-                int pixel_h = 480;
-                int pixel_w = 800;
-                cv::Mat yuv;
-                yuv.create(pixel_h*1.5,pixel_w,CV_8UC1);
-                memcpy(yuv.data,(unsigned char *)stBufInfo.stFrameData.pVirAddr[0], pixel_h*pixel_w*3/2*sizeof(unsigned char));
-                cvtColor(yuv, src, cv::COLOR_YUV2BGR_NV12);
-                
-            }
+            int pixel_h = 480;
+            int pixel_w = 800;
+            cv::Mat yuv;
+            yuv.create(pixel_h*1.5,pixel_w,CV_8UC1);
+            memcpy(yuv.data,(unsigned char *)stBufInfo.stFrameData.pVirAddr[0], pixel_h*pixel_w*3/2*sizeof(unsigned char));
+            cvtColor(yuv, src, cv::COLOR_YUV2BGR_NV12);
+
+        }
         // doSnDetect(manager, &stBufInfo);
         //doDetectPerson(manager, &stBufInfo);
         ALGO_Input_t algo_input;
@@ -595,44 +608,61 @@ int main(int argc, char* argv[]) {
         algo_input.p_vir_addr = stBufInfo.stFrameData.pVirAddr[0];
         algo_input.phy_addr = stBufInfo.stFrameData.phyAddr[0];
         algo_input.buf_size = stBufInfo.stFrameData.u32BufSize;
-        algo_input.pts = stBufInfo.u64Pts;  
-		ALGO_DET_Run(manager, &algo_input, bboxes, &num_bboxes);
+        algo_input.pts = stBufInfo.u64Pts;
+        ALGO_DET_Run(manager, &algo_input, bboxes, &num_bboxes);
         printf("---->image path: %s\n",images[idx].c_str());
 
         for(int i = 0; i < num_bboxes; i++)
-		{
-
-			cv::Rect rect(
+        {
+            cv::Rect rect(
                 bboxes[i].x,
                 bboxes[i].y,
                 bboxes[i].width,
                 bboxes[i].height);
-			
+
             cv::Scalar frame_color(0,0,255);
 
             std::string r_label_text = "";
             if (bboxes[i].class_id == 0) {
                 r_label_text = "person";
                 frame_color = cv::Scalar(0,0,255);
-            }
-            else if (bboxes[i].class_id == 1) {
-                r_label_text = "cat";
+            }else if (bboxes[i].class_id == 1) {
+                r_label_text = "bicycle";
                 frame_color = cv::Scalar(255,0,0);
-            }
-            else if (bboxes[i].class_id == 2) {
+            }else if (bboxes[i].class_id == 2) {
+                r_label_text = "car";
+                frame_color = cv::Scalar(0,255,0);
+            }else if (bboxes[i].class_id == 3) {
+                r_label_text = "motorcycle";
+                frame_color = cv::Scalar(0,255,0);
+            }else if (bboxes[i].class_id == 4) {
+                r_label_text = "bus";
+                frame_color = cv::Scalar(0,255,0);
+            }else if (bboxes[i].class_id == 5) {
+                r_label_text = "truck";
+                frame_color = cv::Scalar(0,255,0);
+            }else if (bboxes[i].class_id == 6) {
+                r_label_text = "cat";
+                frame_color = cv::Scalar(0,255,0);
+            }else if (bboxes[i].class_id == 7) {
                 r_label_text = "dog";
                 frame_color = cv::Scalar(0,255,0);
-            }
-            else {
+            }else if (bboxes[i].class_id == 8) {
+                r_label_text = "head";
+                frame_color = cv::Scalar(0,255,0);
+            }else if (bboxes[i].class_id == 9) {
+                r_label_text = "face";
+                frame_color = cv::Scalar(0,255,0);
+            }else {
                 frame_color = cv::Scalar(0,0,0);
                 r_label_text = "other";
             }
-            
+
             cv::rectangle(src, rect, frame_color, 1, cv::LINE_8,0);
             // printf("--->do rect x,y,w,h%d,%d,%d,%d\n",bboxes[i].x,bboxes[i].y,bboxes[i].width,bboxes[i].height);
 
             cv::putText(
-                src, 
+                src,
                 r_label_text + "0." + std::__cxx11::to_string(int(bboxes[i].score * 100)),
                 cv::Point(
                     float(bboxes[i].x),
@@ -641,8 +671,9 @@ int main(int argc, char* argv[]) {
                 0.6,
                 frame_color,
                 2);
-		}
+        }
 
+        mkdir("./output", 0777);
         std::string output_dir = "./output/" + time_str + "/";
         mkdir(output_dir.c_str(), 0777);
         std::string output_image_dir = output_dir + "images/";
@@ -659,17 +690,17 @@ int main(int argc, char* argv[]) {
 
         std::string result_image_base_name = image_base_name.replace(last_dot_pos, image_base_name.size() - last_dot_pos, ".png");
 
-		std::string image_save_path = output_image_dir + image_base_name;
+        std::string image_save_path = output_image_dir + image_base_name;
         std::cout << "result_image_save_path: " << result_image_base_name << std::endl;
         std::cout << "image_save_path: " << image_save_path << std::endl;
-		cv::imwrite(image_save_path, src);
-		src.release();
-		
-	}
+        cv::imwrite(image_save_path, src);
+        src.release();
 
-	MI_SYS_FlushInvCache(pVirSrcBufAddr, srcBuffSize);
-	MI_SYS_Munmap(pVirSrcBufAddr, srcBuffSize);
-	printf("the doDetectPerson is ok \n");
+    }
+
+    MI_SYS_FlushInvCache(pVirSrcBufAddr, srcBuffSize);
+    MI_SYS_Munmap(pVirSrcBufAddr, srcBuffSize);
+    printf("the doDetectPerson is ok \n");
 
     return 0;
 }

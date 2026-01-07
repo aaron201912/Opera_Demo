@@ -126,12 +126,8 @@ typedef void (*hdmi_player_video_frame_flip_cb_t)(hdmi_player_video_frame_t fram
 
 /* hdmi player configuration parameters, users can configure it according to their needs */
 typedef struct hdmi_player_config_s {
-    /* audio output mute */
-    bool mute;
     /* audio game mode */
     bool game_mode;
-    /* audio output volume [0-100] */
-    int32_t volume;
     /* audio output device */
     hdmi_player_ao_dev_e ao_dev;
     /* audio output format */
@@ -216,6 +212,16 @@ __attribute__((visibility("default"))) int32_t hdmi_player_select_audio_output_f
 *     Zero if successful, otherwise a negative error code.
 */
 __attribute__((visibility("default"))) int32_t hdmi_player_set_volume(int32_t volume);
+/*
+* Adjust audio output hw volume
+*
+* Parameters
+* [IN]    volume   -  volume value range [min-max], by hw spec
+* Returns
+*     Zero if successful, otherwise a negative error code.
+*/
+__attribute__((visibility("default"))) int32_t hdmi_player_set_volume2(int32_t volume);
+
 /*
 * Adjust audio output volume
 *

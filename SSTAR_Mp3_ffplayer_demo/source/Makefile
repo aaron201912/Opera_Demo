@@ -82,8 +82,8 @@ install:
 
 clean:
 	@echo clean ...
-	@-rm -rf $(OBJS_OUTPUT_DIR)
-	@-rm -rf $(BIN_OUTPUT_DIR)
+	@-rm -rf $(OBJS_OUTPUT_DIR)/*
+	@-rm -rf $(BIN_OUTPUT_DIR)/*
 	@echo clean done!
 
 .PHONY:all prepare clean $(TARGET)

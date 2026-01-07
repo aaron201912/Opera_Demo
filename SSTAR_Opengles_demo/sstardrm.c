@@ -295,15 +295,27 @@ static int drm_atomic_commit(buffer_object_t *bobj ,int fb_id) {
     drmModeAtomicAddProperty(req, bobj->plane_id, prop_ids->SRC_H,  bobj->height << 16);//Note this,src_height must be << 16
     drmModeAtomicAddProperty(req, bobj->crtc_id, prop_ids->ACTIVE, 1);
     drmModeAtomicAddProperty(req, bobj->crtc_id, prop_ids->MODE_ID, bobj->blob_id);
+
     drmModeAtomicAddProperty(req, bobj->conn_id, prop_ids->CRTC_ID, bobj->crtc_id);
+    printf("bobj->out_fence = %d\n",bobj->out_fence);
+    drmModeAtomicAddProperty(req, bobj->crtc_id, prop_ids->FENCE_ID, (uint64_t)&bobj->out_fence);//use this flag,must be close out_fence
 
     ret = drmModeAtomicCommit(bobj->fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
+    printf("bobj->out_fence = %d\n",bobj->out_fence);
     if(ret != 0)
     {
         printf("drmModeAtomicCommit failed ret=%d \n",ret);
         return -1;
     }
     drmModeAtomicFree(req);
+
+    ret = sync_wait(bobj->out_fence, 20);
+    if(ret)
+    {
+        printf("waring:maybe drop one drm frame, ret=%d out_fence=%d\n", ret, bobj->out_fence);
+    }
+    close(bobj->out_fence);
+
     return 0;
 }
 

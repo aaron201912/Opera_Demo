@@ -4,9 +4,16 @@
 #include "sstar_algo.h"
 #include "rtsp.h"
 #include <getopt.h>
+#ifdef SSTAR_VDF
+#include "sstar_vdf.h"
+#endif
 
 #define BUF_NUM 2
+#ifdef SSTAR_VDF
+extern int bVdfGetExit, bVdfPutExit;
+#endif
 int _g_snr_num = 1;
+
 buffer_object_t _g_buf_obj[BUF_NUM];
 /*****************************************************************************
  Sensor + Drm + Rgn + Algo case
@@ -19,10 +26,11 @@ void display_help(void)
     printf("-i : chose iqbin path for the fisrt pipeline\n");
     printf("-I : chose iqbin path for the second pipeline\n");
     printf("-n : [1:2]enable multi sensor and select pipeline\n");
+    printf("-v : first pipeline select vdf or venc, 0 is vdf, 1 is venc\n");
     printf("-m : chose detect model path for the fisrt pipeline\n");
     printf("-a : enable face detect funtion for the fisrt pipeline\n");
     printf("-r : set rotate mode,default value is 0. [0,1,2,3] = [0,90,180,270]\n");
-    printf("-H : [0/1]enable hdr\n");    
+    printf("-H : [0/1]enable hdr\n");
     printf("eg:./Drm_sensor -s 0 -i /customer/iq.bin\n");
     return;
 }
@@ -47,7 +55,7 @@ int parse_args(int argc, char **argv)
             {0, 0, 0, 0}
     };
 
-    while ((s32Opt = getopt_long(argc, argv, "i:I:m:s:n:a:r:H:",long_options, &option_index))!= -1 )
+    while ((s32Opt = getopt_long(argc, argv, "i:I:m:s:n:v:a:r:H:",long_options, &option_index))!= -1 )
     {
         switch(s32Opt)
         {
@@ -99,6 +107,11 @@ int parse_args(int argc, char **argv)
 				_g_buf_obj[0].sensorIdx = 0;
                 break;
             }
+            case 'v'://first pipeline select vdf or venc
+            {
+				_g_buf_obj[0].venc_flag = atoi(optarg);
+                break;
+            }
             case 'a'://face detect
             {
                 _g_buf_obj[0].face_detect = atoi(optarg);
@@ -127,50 +140,50 @@ int parse_args(int argc, char **argv)
 
 void  int_buf_obj(int i)
 {
-    _g_buf_obj[i].venc_flag = 1;
     if(i == 0){
         _g_buf_obj[i].pszStreamName = MAIN_STREAM0;
         _g_buf_obj[i].vencChn = 0;
     	_g_buf_obj[i].width = ALIGN_BACK(1920, ALIGN_NUM);
-    	_g_buf_obj[i].height = ALIGN_BACK(1080, ALIGN_NUM);               
+    	_g_buf_obj[i].height = ALIGN_BACK(1080, ALIGN_HEIGHT_NUM);
     	_g_buf_obj[i].vdec_info.v_src_width = _g_buf_obj[i].width;
     	_g_buf_obj[i].vdec_info.v_src_height = _g_buf_obj[i].height;
     	_g_buf_obj[i].vdec_info.v_src_stride = _g_buf_obj[i].vdec_info.v_src_width;
     	_g_buf_obj[i].vdec_info.v_src_size = (_g_buf_obj[i].vdec_info.v_src_height * _g_buf_obj[i].vdec_info.v_src_stride * 3)/2;
-	
+
     	_g_buf_obj[i].vdec_info.v_out_x = 0;
     	_g_buf_obj[i].vdec_info.v_out_y = 0;
     	_g_buf_obj[i].vdec_info.v_out_width = _g_buf_obj[i].width;
     	_g_buf_obj[i].vdec_info.v_out_height = _g_buf_obj[i].height;
     	_g_buf_obj[i].vdec_info.v_out_stride = _g_buf_obj[i].vdec_info.v_out_width;
     	_g_buf_obj[i].vdec_info.v_out_size = (_g_buf_obj[i].vdec_info.v_out_height * _g_buf_obj[i].vdec_info.v_out_stride * 3)/2;
-			
+
 	}
     else
     {
 		#ifdef CHIP_IS_SSU9383
-        _g_buf_obj[i].sensorIdx = 2; 
+        _g_buf_obj[i].sensorIdx = 2;
 		#endif
 		#ifdef CHIP_IS_SSD2386
-		_g_buf_obj[i].sensorIdx = 1; 
+		_g_buf_obj[i].sensorIdx = 1;
 		#endif
+    	_g_buf_obj[i].venc_flag = 1;
         _g_buf_obj[i].pszStreamName = MAIN_STREAM1;
         _g_buf_obj[i].vencChn = 1;
         _g_buf_obj[i].face_detect = 0;
     	_g_buf_obj[i].width = ALIGN_BACK(1920, ALIGN_NUM);
-    	_g_buf_obj[i].height = ALIGN_BACK(1080, ALIGN_NUM);               
+    	_g_buf_obj[i].height = ALIGN_BACK(1080, ALIGN_HEIGHT_NUM);
     	_g_buf_obj[i].vdec_info.v_src_width = _g_buf_obj[i].width;
     	_g_buf_obj[i].vdec_info.v_src_height = _g_buf_obj[i].height;
     	_g_buf_obj[i].vdec_info.v_src_stride = _g_buf_obj[i].vdec_info.v_src_width;
     	_g_buf_obj[i].vdec_info.v_src_size = (_g_buf_obj[i].vdec_info.v_src_height * _g_buf_obj[i].vdec_info.v_src_stride * 3)/2;
-	
+
     	_g_buf_obj[i].vdec_info.v_out_x = 0;
     	_g_buf_obj[i].vdec_info.v_out_y = 0;
     	_g_buf_obj[i].vdec_info.v_out_width = _g_buf_obj[i].width;
     	_g_buf_obj[i].vdec_info.v_out_height = _g_buf_obj[i].height;
     	_g_buf_obj[i].vdec_info.v_out_stride = _g_buf_obj[i].vdec_info.v_out_width;
     	_g_buf_obj[i].vdec_info.v_out_size = (_g_buf_obj[i].vdec_info.v_out_height * _g_buf_obj[i].vdec_info.v_out_stride * 3)/2;
-			
+
 	}
     _g_buf_obj[i].vdec_info.v_bframe = 0;
     sem_init(&_g_buf_obj[i].sem_avail, 0, MAX_NUM_OF_DMABUFF);
@@ -198,6 +211,11 @@ int  deint_buf_obj(buffer_object_t *buf_obj)
 int main(int argc, char **argv)
 {
     int i;
+#ifdef SSTAR_VDF
+    pthread_t vdf_put_id;
+    pthread_t vdf_get_id;
+#endif
+
 	/************************************************
     Step1:  create pipeline
     *************************************************/
@@ -238,10 +256,20 @@ int main(int argc, char **argv)
             _g_buf_obj[i].rgn_chn_port_info.eModId = E_MI_MODULE_ID_SCL;
             _g_buf_obj[i].rgn_chn_port_info.u32DevId = SensorAttr.u32SclDevId;
             _g_buf_obj[i].rgn_chn_port_info.u32ChnId = SensorAttr.u32SclChnId;
-            _g_buf_obj[i].rgn_chn_port_info.u32PortId = SensorAttr.u32SclOutPortId;          
+            _g_buf_obj[i].rgn_chn_port_info.u32PortId = SensorAttr.u32SclOutPortId;
             sstar_init_rgn(&_g_buf_obj[i]);
             sstar_algo_init(&_g_buf_obj[i]);
         }
+#ifdef SSTAR_VDF
+		if(_g_buf_obj[i].venc_flag == 0 && i == 0)
+		{
+		    ExecFunc(sstar_vdf_init(_g_buf_obj[i].width, _g_buf_obj[i].height), MI_SUCCESS);
+		    bVdfGetExit = 0;
+		    bVdfPutExit = 0;
+		    pthread_create(&vdf_put_id, NULL, sstar_vdf_feed_buff_thread, (void *)&_g_buf_obj[i].chn_port_info);
+		    pthread_create(&vdf_get_id, NULL, sstar_vdf_get_result_thread, NULL);
+		}
+#endif
     }
 	/************************************************
     Step2:  create rtsp
@@ -260,6 +288,16 @@ int main(int argc, char **argv)
     *************************************************/
     for(i=0; i< _g_snr_num && i < BUF_NUM; i++)
     {
+#ifdef SSTAR_VDF
+		if(_g_buf_obj[i].venc_flag == 0 && i == 0)
+		{
+		    bVdfGetExit = 1;
+		    pthread_join(vdf_get_id, NULL);
+		    bVdfPutExit = 1;
+		    pthread_join(vdf_put_id, NULL);
+		    sstar_vdf_deinit();
+		}
+#endif
         if(_g_buf_obj[i].face_detect)
         {
             sstar_algo_deinit();

@@ -7,24 +7,24 @@ endif
 ifeq ($(TOOLCHAIN_VERSION),10.2.1)
 CROSS_COMPILE ?=aarch64-linux-gnu-
 endif
-PROJ_ROOT=/users/peng.xiong/Opera_V2.0.0/project
+PROJ_ROOT ?= ../project
 
 #test
 TEST_OBJECT:= ./dla_show_img_info.cpp ./show_ipu_log.cpp
-INCLUDE_TEST += -I $(PROJ_ROOT)/release/include  -I $(PROJ_ROOT)/release/include/ipu/opera -I ./
-#INCLUDE_TEST += -I $(PROJ_ROOT)/../kernel/drivers/sstar/include   
+INCLUDE_TEST += -I $(PROJ_ROOT)/release/include -I $(PROJ_ROOT)/release/include/ipu/opera -I ./ -I ./
+#INCLUDE_TEST += -I $(PROJ_ROOT)/../kernel/drivers/sstar/include
 
 #dynamic
 LIBS_SHARED_TEST += -L $(PROJ_ROOT)/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/mi_libs/dynamic -lmi_ipu  -lmi_sys -lmi_common
-LIBS_SHARED_TEST += -L $(PROJ_ROOT)/release/chip/p5/sigma_common_libs/glibc/$(TOOLCHAIN_VERSION)/dynamic -lcam_fs_wrapper 
+LIBS_SHARED_TEST += -L $(PROJ_ROOT)/release/chip/p5/sigma_common_libs/glibc/$(TOOLCHAIN_VERSION)/dynamic -lcam_fs_wrapper
 #static
 LIBS_STATICT_TEST += -L $(PROJ_ROOT)/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/mi_libs/static -lmi_ipu -lmi_sys -lmi_common
 LIBS_STATICT_TEST += -L $(PROJ_ROOT)/release/chip/p5/sigma_common_libs/glibc/$(TOOLCHAIN_VERSION)/static -lcam_fs_wrapper -lcam_os_wrapper
-CXXFLAGS := -Wno-psabi -std=c++11 
+CXXFLAGS := -Wno-psabi -std=c++11
 all:
 	rm -rf out
 	mkdir out
-	
+
 ifeq ($(TOOLCHAIN_VERSION),6.4.0)
 	#dynamic
 	#$(CROSS_COMPILE)g++ $(CXXFLAGS) $(INCLUDE_TEST) $(TEST_OBJECT) -O3 -g -Wall -o ./out/prog_dla_dla_show_img_info $(LIBS_STATICT_TEST) -static -Wl,-rpath=./out/ -lm -lpthread -ldl -march=armv7-a -mfpu=neon -ffast-math

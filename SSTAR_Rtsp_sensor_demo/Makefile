@@ -8,6 +8,8 @@ AR  = $(CROSS_COMPILE)ar
 
 ALKAID_PATH ?= ..
 INTERFACE_CUS3A = enable
+SSTAR_VDF = disable
+
 dirs := ./ ./common
 dirs += ./sensor ./rgn ./algo ./rtsp ./scl ./venc
 OUTPUT_DIR := ./out
@@ -17,13 +19,20 @@ COM_FLAGS = -Wall -g -fPIC
 C_FLAGS  = $(COM_FLAGS) -std=gnu11
 CPP_FLAGS  = $(COM_FLAGS) -std=gnu++11
 
-INCLUDES  := -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include -I$(ALKAID_PATH)/project/release/include/isp -I$(ALKAID_PATH)/project/release/include/isp/opera -I./include -I$(ALKAID_PATH)/project/release/include/ipu/opera 
+INCLUDES  := -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include -I$(ALKAID_PATH)/project/release/include/isp -I$(ALKAID_PATH)/project/release/include/isp/opera -I./include -I$(ALKAID_PATH)/project/release/include/ipu/opera
 INCLUDES  += -I./common -I./sensor -I./rgn -I./algo -I./rtsp -I./scl -I./venc
 INCLUDES  += -I./rtsp/live555/UsageEnvironment/include
 INCLUDES  += -I./rtsp/live555/groupsock/include
 INCLUDES  += -I./rtsp/live555/liveMedia/include
 INCLUDES  += -I./rtsp/live555/BasicUsageEnvironment/include
 INCLUDES  += -I./rtsp/live555/mediaServer/include
+
+ifeq ($(SSTAR_VDF),enable)
+dirs += ./vdf
+INCLUDES  += -I./vdf
+C_FLAGS += -DSSTAR_VDF
+CPP_FLAGS += -DSSTAR_VDF
+endif
 
 TARGET_NAME  := Rtsp_sensor_demo
 
@@ -63,6 +72,10 @@ endif
 LIB_PATH  += -L$(ALKAID_PATH)/project/release/chip/p5/dispcam/common/glibc/$(TOOLCHAIN_VERSION)/mi_libs/dynamic
 LIB_PATH  += -L$(ALKAID_PATH)/project/release/chip/p5/sigma_common_libs/glibc/$(TOOLCHAIN_VERSION)/dynamic/
 LIB_NAME := -lm -llive555 -lmi_venc -lmi_isp -lmi_vif -lmi_sensor -lmi_iqserver -lmi_scl -lmi_sys -lmi_rgn -lmi_ipu -lmi_common -lsstaralgo_det -ldl -lcam_os_wrapper  -lcam_fs_wrapper -lpthread
+ifeq ($(SSTAR_VDF),enable)
+LIB_NAME += -lmi_vdf -lmi_shadow -lMD_LINUX -lOD_LINUX -lVG_LINUX -lmi_ive
+endif
+
 #-lmi_hdmirx
 ifeq ($(INTERFACE_CUS3A), enable)
 LIB_NAME += -lcus3a -lispalgo

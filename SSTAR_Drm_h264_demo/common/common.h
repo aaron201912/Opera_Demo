@@ -20,8 +20,8 @@
 #include "mi_vif.h"
 #include "mi_venc.h"
 #include "mi_venc_datatype.h"
-//#include "mi_vdec.h"
-//#include "mi_vdec_datatype.h"
+#include "mi_vdec.h"
+#include "mi_vdec_datatype.h"
 
 #if defined (__cplusplus)
 extern "C" {

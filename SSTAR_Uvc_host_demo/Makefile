@@ -21,8 +21,8 @@ COM_FLAGS = -Wall -g -fPIC
 C_FLAGS  = $(COM_FLAGS) -std=gnu11
 CPP_FLAGS  = $(COM_FLAGS) -std=gnu++11
 
-INCLUDES  := -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include -I$(ALKAID_PATH)/project/release/include/isp -I$(ALKAID_PATH)/project/release/include/isp/opera -I./include -I$(ALKAID_PATH)/project/release/include/ipu/opera 
-INCLUDES  += -I./common -I./drm -I./drm/libdrm -I./scl -I./vdec -I./uvc_host
+INCLUDES  := -I./common -I./drm -I./drm/libdrm -I./scl -I./vdec -I./uvc_host
+INCLUDES  += -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include -I$(ALKAID_PATH)/project/release/include/isp -I$(ALKAID_PATH)/project/release/include/isp/opera -I./include -I$(ALKAID_PATH)/project/release/include/ipu/opera
 
 TARGET_NAME  := uvc_host_demo
 

@@ -321,7 +321,7 @@ pthread_t tid_algo_thread;
 DetectionInfo_t g_detection_info =
 {
     "/config/dla/ipu_lfw.bin",
-    "/customer/res/sypcn+face_y2.48_V3.10_20230714_fixed.sim_sgsimg.img",
+    "/customer/res/sdy48.img",
     0.75, //threshold
     {1024, 600}, //转成显示的分辨率
 };

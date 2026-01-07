@@ -1,6 +1,6 @@
-﻿Demo说明：
+Demo说明：
     本Demo主要针对的是HDMIRX->HVP->SCL->VENC->RTSP的使用介绍
-
+	如需要支持hdcp，需要额外定义HDCP_KEY_PATH
     需要SDK支持HDMIRX
 
 一、编译说明：

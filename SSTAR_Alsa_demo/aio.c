@@ -244,8 +244,6 @@ struct cmd
 
 struct ctx
 {
-    
-
     // for ai
     snd_pcm_t *      in_pcm;
     FILE *in_file;
@@ -328,7 +326,7 @@ typedef enum
 
 int set_volume(E_VOLUME_TYPE volume_type, const char* mix_name, unsigned int card_id, long outvol)
 {
-    
+
     snd_mixer_t* handle;
     snd_mixer_elem_t* elem;
     snd_mixer_selem_id_t* sid;
@@ -375,11 +373,54 @@ int set_volume(E_VOLUME_TYPE volume_type, const char* mix_name, unsigned int car
         if(snd_mixer_selem_set_capture_volume(elem, 0, outvol) < 0) {
             snd_mixer_close(handle);
             return -9;
-        }        
+        }
     }
 
-    printf("set volume\n\r");
+    PrintInfo("set volume\n\r");
     snd_mixer_close(handle);
+    return 0;
+}
+
+int aio_amp_ctl(unsigned int card_id, const char *ctl_name, int enable)
+{
+    snd_ctl_t *handle;
+    snd_ctl_elem_id_t *id;
+    snd_ctl_elem_value_t *control;
+    int err;
+    char card_name[64] = "default";
+    sprintf(card_name, "hw:%i", card_id);
+
+    snd_ctl_elem_id_alloca(&id);
+    snd_ctl_elem_id_set_interface(id, SND_CTL_ELEM_IFACE_MIXER);
+    snd_ctl_elem_id_set_name(id, ctl_name);
+
+    if ((err = snd_ctl_open(&handle, card_name, 0)) < 0) {
+        PrintErr("aio_amp_ctl open %s fail: %s\n", card_name, snd_strerror(err));
+        return err;
+    }
+
+    snd_ctl_elem_value_alloca(&control);
+    snd_ctl_elem_value_set_id(control, id);
+
+    snd_ctl_elem_value_set_boolean(control, 0, enable);
+    snd_ctl_elem_value_set_boolean(control, 1, enable);
+
+    if ((err = snd_ctl_elem_write(handle, control)) < 0) {
+        PrintErr("aio_amp_ctl write %s fail: %s\n", ctl_name, snd_strerror(err));
+        snd_ctl_close(handle);
+        return err;
+    }
+
+    if ((err = snd_ctl_elem_read(handle, control)) < 0) {
+        PrintErr("aio_amp_ctl read %s fail: %s\n", ctl_name, snd_strerror(err));
+        snd_ctl_close(handle);
+        return err;
+    }else{
+        PrintInfo("aio_amp right: %d\n", snd_ctl_elem_value_get_boolean(control, 0));
+        PrintInfo("aio_amp left: %d\n", snd_ctl_elem_value_get_boolean(control, 1));
+    }
+
+    snd_ctl_close(handle);
     return 0;
 }
 
@@ -1102,7 +1143,7 @@ static int sample_ctx_deinit(struct ctx *ctx, struct cmd *cmd)
     if(strcasecmp(cmd->interface, "adc_a") == 0)
     {
         ai_adc_a_enable(cmd->in_card_id, false);
-    } 
+    }
     else if (strcasecmp(cmd->interface, "adc_b") == 0)
     {
         ai_adc_b_enable(cmd->in_card_id, false);
@@ -1210,6 +1251,7 @@ static int sample_deinit(struct ctx *ctx, struct cmd *cmd)
         snd_pcm_close(ctx->out_pcm);
     }
 
+    aio_amp_ctl(cmd->out_card_id, "AMP_CTL", 0);
     FUNC_EXIT();
     return ret;
 }
@@ -1400,7 +1442,7 @@ static int sample_ctx_init(struct ctx *ctx, struct cmd *cmd)
 
     // passthrough only support 1 or 2 channels, out channel must equals in channel
     if(cmd->usecase_type == USECASE_PASSTHROUGH && (cmd->pt_in_out_channels > 2 || cmd->pt_in_rate == 0 || cmd->pt_out_rate == 0)){
-        PrintErr("Error passthrough param cmd->pt_in_out_channels(%u) cmd->pt_in_rate(%u) cmd->pt_out_rate(%u)!\n", 
+        PrintErr("Error passthrough param cmd->pt_in_out_channels(%u) cmd->pt_in_rate(%u) cmd->pt_out_rate(%u)!\n",
                 cmd->pt_in_out_channels, cmd->pt_in_rate, cmd->pt_out_rate);
         ret = DEMO_FAIL;
     }
@@ -1420,18 +1462,19 @@ static int sample_init(struct ctx *ctx, struct cmd *cmd)
     FUNC_ENTER();
     int  ret      = DEMO_SUCCESS;
 
+    aio_amp_ctl(cmd->out_card_id, "AMP_CTL", 1);
     // need attach first
     if(strcasecmp(cmd->interface, "adc_a") == 0)
     {
         ai_adc_a_enable(cmd->in_card_id, true);
         set_volume(CAPTURE, "ADC_A_0", cmd->in_card_id, cmd->in_volume);
         set_volume(CAPTURE, "ADC_A_1", cmd->in_card_id, cmd->in_volume);
-    } 
+    }
     else if (strcasecmp(cmd->interface, "adc_b") == 0)
     {
         ai_adc_b_enable(cmd->in_card_id, true);
         set_volume(CAPTURE, "ADC_B_0", cmd->in_card_id, cmd->in_volume);
-        set_volume(CAPTURE, "ADC_B_1", cmd->in_card_id, cmd->in_volume);    
+        set_volume(CAPTURE, "ADC_B_1", cmd->in_card_id, cmd->in_volume);
     }
     else if (strcasecmp(cmd->interface, "dmic") == 0)
     {
@@ -1472,7 +1515,7 @@ static int sample_init(struct ctx *ctx, struct cmd *cmd)
     {
         ai_i2s_b_enable(cmd->in_card_id, true);
         set_volume(CAPTURE, "I2S_RXB_0", cmd->in_card_id, cmd->in_volume);
-        set_volume(CAPTURE, "I2S_RXB_1", cmd->in_card_id, cmd->in_volume); 
+        set_volume(CAPTURE, "I2S_RXB_1", cmd->in_card_id, cmd->in_volume);
     }
     // for ao
     else if (strcasecmp(cmd->interface, "dac") == 0)
@@ -1496,7 +1539,7 @@ static int sample_init(struct ctx *ctx, struct cmd *cmd)
     {
         ao_i2s_a_enable(cmd->out_card_id, true);
         set_volume(PACKBACK, "I2S_TXA_0", cmd->in_card_id, cmd->out_volume);
-        set_volume(PACKBACK, "I2S_TXA_1", cmd->in_card_id, cmd->out_volume);     
+        set_volume(PACKBACK, "I2S_TXA_1", cmd->in_card_id, cmd->out_volume);
     }
     else if (strcasecmp(cmd->interface, "i2s_b") == 0)
     {
@@ -1512,7 +1555,7 @@ static int sample_init(struct ctx *ctx, struct cmd *cmd)
         set_volume(CAPTURE, "ADC_A_0", cmd->in_card_id, cmd->in_volume);
         set_volume(CAPTURE, "ADC_A_1", cmd->in_card_id, cmd->in_volume);
         set_volume(PACKBACK, "SPDIF_TX_0", cmd->in_card_id, cmd->out_volume);
-        set_volume(PACKBACK, "SPDIF_TX_1", cmd->in_card_id, cmd->out_volume);                
+        set_volume(PACKBACK, "SPDIF_TX_1", cmd->in_card_id, cmd->out_volume);
     }
     else if (strcasecmp(cmd->interface, "adc_a-dac") == 0)
     {
@@ -1714,7 +1757,7 @@ int main(int argc, char *argv[])
                                            {"in_time", 'T', OPTPARSE_REQUIRED},
                                            {"out_time", 't', OPTPARSE_REQUIRED},
                                            {"in_volume", 'V', OPTPARSE_REQUIRED},
-                                           {"out_volume", 'v', OPTPARSE_REQUIRED},                                           
+                                           {"out_volume", 'v', OPTPARSE_REQUIRED},
                                            {"help", 'h', OPTPARSE_NONE},
 
                                            {0, 0, 0}};

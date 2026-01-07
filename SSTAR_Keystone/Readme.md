@@ -54,7 +54,9 @@
 3. demo放置到任意路径，只需在make的时候指定ALKAID_PATH到工程的目录（需要链接SDK头文件）  
     --> declare -x ALKAID_PATH=~/sdk/source_code/${mysdkrootpath}  
     --> make clean; make
-
+ex：
+make TOOLCHAIN_VERSION=6.4.0 ALKAID_PATH=/home/jackson.pan/customer/stable_p5/project CHIP=SSD2381
+cp out/sstar_keystone ~/customer/stable_p5/sdk/verify/application/lvgl_demo_bga16_2/prog_keystone 
 ---
 
 ## 三、运行环境说明

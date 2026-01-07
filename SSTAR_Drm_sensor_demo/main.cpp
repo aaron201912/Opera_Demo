@@ -129,7 +129,7 @@ int parse_args(int argc, char **argv)
             {
                 if (optarg == NULL) {
                     printf("Missing panel type -c 'ttl or mipi' \n");
-                    break; 
+                    break;
                 }
                 memcpy(connector_name, optarg, strlen(optarg));
                 printf("connector_name %s %d\n",connector_name,strlen(connector_name));
@@ -147,14 +147,14 @@ int parse_args(int argc, char **argv)
                     else {
                         display_help();
                         return DRM_FAIL;
-                    }                   
+                    }
                 }
                 break;
             }
             case 'H':
                 _g_buf_obj[0].Hdr_Used = atoi(optarg);
                 break;
-            case 'h':   
+            case 'h':
             default:
             {
                 display_help();
@@ -194,23 +194,23 @@ void  int_buf_obj(int i)
         _g_buf_obj[i].scl_rotate = 0;
         _g_buf_obj[i].vdec_info.plane_type = MOPG;
         sstar_drm_getattr(&_g_buf_obj[i]);
-        
+
         _g_buf_obj[i].vdec_info.v_src_width = ALIGN_BACK(_g_buf_obj[i].width, ALIGN_NUM);
         _g_buf_obj[i].vdec_info.v_src_height = ALIGN_BACK(_g_buf_obj[i].height, ALIGN_NUM);
         _g_buf_obj[i].vdec_info.v_src_stride = _g_buf_obj[i].vdec_info.v_src_width;
         _g_buf_obj[i].vdec_info.v_src_size = (_g_buf_obj[i].vdec_info.v_src_height * _g_buf_obj[i].vdec_info.v_src_stride * 3)/2;
-    
+
         _g_buf_obj[i].vdec_info.v_out_x = 0;
         _g_buf_obj[i].vdec_info.v_out_y = 0;
         _g_buf_obj[i].vdec_info.v_out_width = ALIGN_BACK(_g_buf_obj[i].width, ALIGN_NUM);
         _g_buf_obj[i].vdec_info.v_out_height = ALIGN_BACK(_g_buf_obj[i].height, ALIGN_NUM);
         _g_buf_obj[i].vdec_info.v_out_stride = _g_buf_obj[i].vdec_info.v_out_width;
         _g_buf_obj[i].vdec_info.v_out_size = (_g_buf_obj[i].vdec_info.v_out_height * _g_buf_obj[i].vdec_info.v_out_stride * 3)/2;
-            
+
     }
     else{
         #ifdef CHIP_IS_SSU9383
-        _g_buf_obj[i].sensorIdx = 2; 
+        _g_buf_obj[i].sensorIdx = 2;
         #endif
         #ifdef CHIP_IS_SSD2386
         _g_buf_obj[i].sensorIdx = 1;
@@ -220,19 +220,19 @@ void  int_buf_obj(int i)
         _g_buf_obj[i].connector_type = _g_buf_obj[0].connector_type;
         sstar_drm_getattr(&_g_buf_obj[i]);
         _g_buf_obj[i].width = _g_buf_obj[i].width/2;
-        _g_buf_obj[i].height = _g_buf_obj[i].height/2;        
+        _g_buf_obj[i].height = _g_buf_obj[i].height/2;
         _g_buf_obj[i].vdec_info.v_src_width = ALIGN_BACK(_g_buf_obj[i].width, ALIGN_NUM);
         _g_buf_obj[i].vdec_info.v_src_height = ALIGN_BACK(_g_buf_obj[i].height, ALIGN_NUM);
         _g_buf_obj[i].vdec_info.v_src_stride = _g_buf_obj[i].vdec_info.v_src_width;
         _g_buf_obj[i].vdec_info.v_src_size = (_g_buf_obj[i].vdec_info.v_src_height * _g_buf_obj[i].vdec_info.v_src_stride * 3)/2;
-    
+
         _g_buf_obj[i].vdec_info.v_out_x = 0;
         _g_buf_obj[i].vdec_info.v_out_y = 0;
         _g_buf_obj[i].vdec_info.v_out_width = ALIGN_BACK(_g_buf_obj[i].width, ALIGN_NUM);
         _g_buf_obj[i].vdec_info.v_out_height = ALIGN_BACK(_g_buf_obj[i].height, ALIGN_NUM);
         _g_buf_obj[i].vdec_info.v_out_stride = _g_buf_obj[i].vdec_info.v_out_width;
         _g_buf_obj[i].vdec_info.v_out_size = (_g_buf_obj[i].vdec_info.v_out_height * _g_buf_obj[i].vdec_info.v_out_stride * 3)/2;
-            
+
     }
     _g_buf_obj[i].vdec_info.v_bframe = 0;
     sem_init(&_g_buf_obj[i].sem_avail, 0, MAX_NUM_OF_DMABUFF);
@@ -456,6 +456,7 @@ void* ldc_thread_loop(void* param)
     MI_SYS_CloseFd(buf_obj->_g_mi_sys_fd);
     printf("Thread drm_buffer_loop exit \n");
 	buf_obj->bExit_second = 1;
+    sem_post(&buf_obj->sem_avail);
     return (void*)0;
 }
 #endif
@@ -507,11 +508,11 @@ int main(int argc, char **argv)
             _g_buf_obj[i].rgn_chn_port_info.eModId = E_MI_MODULE_ID_SCL;
             _g_buf_obj[i].rgn_chn_port_info.u32DevId = SensorAttr.u32SclDevId;
             _g_buf_obj[i].rgn_chn_port_info.u32ChnId = SensorAttr.u32SclChnId;
-            _g_buf_obj[i].rgn_chn_port_info.u32PortId = SensorAttr.u32SclOutPortId;          
+            _g_buf_obj[i].rgn_chn_port_info.u32PortId = SensorAttr.u32SclOutPortId;
             sstar_init_rgn(&_g_buf_obj[i]);
             sstar_algo_init(&_g_buf_obj[i]);
         }
-        creat_outport_dmabufallocator(&_g_buf_obj[i]);  
+        creat_outport_dmabufallocator(&_g_buf_obj[i]);
         pthread_create(&tid_enqueue_buf_thread[i], NULL, enqueue_buffer_loop, (void*)&_g_buf_obj[i]);
         #ifndef ENABLE_LDC
         pthread_create(&tid_drm_buf_thread[i], NULL, drm_buffer_loop, (void*)&_g_buf_obj[i]);
@@ -540,7 +541,7 @@ int main(int argc, char **argv)
         if(_g_buf_obj[i].face_detect)
         {
             sstar_algo_deinit();
-            sstar_deinit_rgn(&_g_buf_obj[i]);            
+            sstar_deinit_rgn(&_g_buf_obj[i]);
         }
         destroy_snr_pipeline(&_g_buf_obj[i]);
         //destory_outport_dmabufallocator( &_g_buf_obj.chn_port_info);

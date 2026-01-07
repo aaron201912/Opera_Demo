@@ -7,7 +7,7 @@ CC  = $(CROSS_COMPILE)gcc
 CPP = $(CROSS_COMPILE)g++
 AR  = $(CROSS_COMPILE)ar
 
-ALKAID_PATH ?= ../../../../P5_SDK_v3.0
+ALKAID_PATH ?= ..
 INTERFACE_CUS3A = enable
 dirs := ./ ./common
 dirs += ./drm ./sensor ./rgn ./algo ./scl ./venc
@@ -18,8 +18,8 @@ COM_FLAGS = -Wall -g -fPIC
 C_FLAGS  = $(COM_FLAGS) -std=gnu11
 CPP_FLAGS  = $(COM_FLAGS) -std=gnu++11
 
-INCLUDES  := -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include -I$(ALKAID_PATH)/project/release/include/isp -I$(ALKAID_PATH)/project/release/include/isp/opera -I./include -I$(ALKAID_PATH)/project/release/include/ipu/opera 
-INCLUDES  += -I./common  -I./drm -I./drm/libdrm -I./sensor -I./rgn -I./algo -I./scl -I./venc
+INCLUDES  := -I./common  -I./drm -I./drm/libdrm -I./sensor -I./rgn -I./algo -I./scl -I./venc
+INCLUDES  += -I$(ALKAID_PATH)/project/release/include -I$(ALKAID_PATH)/kernel/drivers/sstar/include -I./include -I$(ALKAID_PATH)/project/release/include/isp -I$(ALKAID_PATH)/project/release/include/isp/opera -I./include -I$(ALKAID_PATH)/project/release/include/ipu/opera
 
 TARGET_NAME  := Algo_detect_sensor
 

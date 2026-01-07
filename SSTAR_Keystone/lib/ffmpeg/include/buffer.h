@@ -316,6 +316,26 @@ AVBufferRef *av_buffer_pool_get(AVBufferPool *pool);
 void *av_buffer_pool_buffer_get_opaque(const AVBufferRef *ref);
 
 /**
+ * Allocate an AVBuffer of the given size using mi_sys API.
+ *
+ * @return an AVBufferRef of given size or NULL when out of memory
+ */
+AVBufferRef *av_buffer_alloc_frame(int size);
+
+/**
+ * Same as av_buffer_alloc_frame(), except the returned buffer will be initialized
+ * to zero.
+ */
+AVBufferRef *av_buffer_allocz_frame(int size);
+
+/**
+ * Default free callback, which calls mi_sys API on the buffer data.
+ * This function is meant to be passed to av_buffer_create(), not called
+ * directly.
+ */
+void av_buffer_free_frame(void *opaque, uint8_t *data);
+
+/**
  * @}
  */
 

@@ -30,6 +30,7 @@ extern "C" {
 ALIGN DEFINE
 ***************************************************************/
 #define ALIGN_NUM 16
+#define ALIGN_HEIGHT_NUM 2
 #define ALIGN_BACK(x, a)            (((x) / (a)) * (a))
 #define ALIGN_UP(x, a)            (((x+a-1) / (a)) * (a))
 

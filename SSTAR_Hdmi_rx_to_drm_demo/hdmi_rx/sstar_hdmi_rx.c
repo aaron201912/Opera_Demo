@@ -314,7 +314,7 @@ void* hdmi_rx_plug_detection(void* param)
 					    HvpChnParam.stChnSrcParam.stCropWin.u16Y = (MI_U16)0;
 					    HvpChnParam.stChnSrcParam.stCropWin.u16Width = (MI_U16)TimingInfo.u32Width;
 					    HvpChnParam.stChnSrcParam.stCropWin.u16Height = (MI_U16)TimingInfo.u32Height;
-					    HvpChnParam.stChnSrcParam.enInputColor = (MI_HVP_ColorFormat_e)eColor_format;
+					    HvpChnParam.stChnSrcParam.enInputColor = (MI_HVP_ColorFormat_e)E_MI_HVP_COLOR_FORMAT_YUV444;
 					    // dst
 					    HvpChnParam.stChnDstParam.enColor = (MI_HVP_ColorFormat_e)E_MI_HVP_COLOR_FORMAT_YUV444;
 					    HvpChnParam.stChnDstParam.stCropWin.u16X = (MI_U16)0;
@@ -372,16 +372,40 @@ void* hdmi_rx_plug_detection(void* param)
     printf("Thread hdmi_rx_plug_detection exit\n");
     return NULL;
 }
-
+#define HDCP_KEY_PATH "/customer/hdcp.bin"
 int sstar_init_hdmi_rx(buffer_object_t *buf_obj)
 {
     MI_HDMIRX_Edid_t EdidInfo;
- 
+    MI_HDMIRX_PortId_e stHdmiRxPort = E_MI_HDMIRX_PORT0;
     ExecFunc(MI_HDMIRX_Init(), MI_SUCCESS);
+#ifdef HDCP_KEY_PATH 
+
+    MI_HDMIRX_Hdcp_t stHdmiRxHdcpKey;
+    MI_U8 hdcp_key[289];
+    memset(hdcp_key, 0, sizeof(hdcp_key));
+    FILE* hdcp_key_file = fopen(HDCP_KEY_PATH, "rb");
+    if (hdcp_key_file == NULL) {
+        printf("Error: hdcp file not found!\n");
+    }else{
+        uint32_t read_size = fread(hdcp_key, 1, sizeof(hdcp_key), hdcp_key_file);
+        if (read_size != sizeof(hdcp_key)) {
+            printf("Error: hdcp file size(%u) too short!\n", read_size);
+
+        }
+        fclose(hdcp_key_file);
+    }
+    memset(&stHdmiRxHdcpKey, 0, sizeof(MI_HDMIRX_Hdcp_t));
+    stHdmiRxHdcpKey.u64HdcpDataVirAddr = (MI_U64)(uintptr_t)hdcp_key;
+    stHdmiRxHdcpKey.u32HdcpLength = sizeof(hdcp_key);
+    MI_HDMIRX_LoadHdcp(stHdmiRxPort, &stHdmiRxHdcpKey);
+#endif
+    MI_HDMIRX_SetHotPlug(stHdmiRxPort, FALSE);    
     memset(&EdidInfo, 0, sizeof(MI_HDMIRX_Edid_t));
     EdidInfo.u32EdidLength = sizeof(defaultEdid);
     EdidInfo.u64EdidDataVirAddr = (MI_U64)defaultEdid;
     ExecFunc(MI_HDMIRX_UpdateEdid(E_MI_HDMIRX_PORT0, &EdidInfo), MI_SUCCESS);
+    MI_HDMIRX_SetHotPlug(stHdmiRxPort, TRUE);   
+
     ExecFunc(MI_HDMIRX_Connect(E_MI_HDMIRX_PORT0), MI_SUCCESS);
 
 	pthread_create(&tid_hdmi_rx_plug_detection_thread, NULL, hdmi_rx_plug_detection, (void*)buf_obj);

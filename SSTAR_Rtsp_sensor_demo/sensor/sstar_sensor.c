@@ -687,12 +687,12 @@ static MI_S32 sstar_scl_init_for_sensor(buffer_object_t *buf_obj)
     scl_info.scl_rotate = E_MI_SYS_ROTATE_NONE;
 	if ((buf_obj->scl_rotate == E_MI_SYS_ROTATE_90) || (buf_obj->scl_rotate == E_MI_SYS_ROTATE_270))
     {    
-        scl_info.scl_out_width = ALIGN_BACK(buf_obj->vdec_info.v_out_height, ALIGN_NUM);
-        scl_info.scl_out_height = ALIGN_BACK(buf_obj->vdec_info.v_out_width, ALIGN_NUM);
+        scl_info.scl_out_width = buf_obj->vdec_info.v_out_height;
+        scl_info.scl_out_height = buf_obj->vdec_info.v_out_width;
     }else
     {
-        scl_info.scl_out_width = ALIGN_BACK(buf_obj->vdec_info.v_out_width, ALIGN_NUM);
-        scl_info.scl_out_height = ALIGN_BACK(buf_obj->vdec_info.v_out_height, ALIGN_NUM);
+        scl_info.scl_out_width = buf_obj->vdec_info.v_out_width;
+        scl_info.scl_out_height = buf_obj->vdec_info.v_out_height;
     }
     scl_info.scl_src_chn_port.eModId = E_MI_MODULE_ID_ISP;
     scl_info.scl_src_chn_port.u32DevId = gstSensorAttr[snr_index].u32IspDevId;
@@ -732,8 +732,8 @@ static MI_S32 sstar_scl_init_for_sensor(buffer_object_t *buf_obj)
         scl_info.scl_outport = 0;
         scl_info.scl_hw_outport_mask = E_MI_SCL_HWSCL1;
         scl_info.scl_rotate = gstSensorAttr[snr_index].scl_eRot;
-        scl_info.scl_out_width = ALIGN_BACK(buf_obj->vdec_info.v_out_width, ALIGN_NUM);
-        scl_info.scl_out_height = ALIGN_BACK(buf_obj->vdec_info.v_out_height, ALIGN_NUM);
+        scl_info.scl_out_width = buf_obj->vdec_info.v_out_width;
+        scl_info.scl_out_height = buf_obj->vdec_info.v_out_height;
         scl_info.scl_src_chn_port.eModId = E_MI_MODULE_ID_SCL;
         scl_info.scl_src_chn_port.u32DevId = gstSensorAttr[snr_index].u32SclDevId;
         scl_info.scl_src_chn_port.u32ChnId = gstSensorAttr[snr_index].u32SclChnId;

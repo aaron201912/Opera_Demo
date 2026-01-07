@@ -1,11 +1,11 @@
 Demo说明：
-	本Demo主要针对的是DRM-VDEC架构的使用介绍
+    本Demo主要针对的是DRM-VDEC架构的使用介绍
 
-	需要SDK支持DRM && VDEC
+    需要SDK支持DRM && VDEC
 
 一、编译说明：
-	a.修改makefile中的编译链为系统对应编译链
-	
+    a.修改makefile中的编译链为系统对应编译链
+
     b.如果将demo放到跟project同级目录   （默认方式）
     --> make clean; make
 
@@ -23,9 +23,9 @@ Demo说明：
 --vpath  : 使能vdec,指定video播放文件路径
 -g : 选填,指定显示GOP图标(默认值为0)
 -y : 选填,指定显示NV12图像(默认值为0)
--c : 必填,指定输出panel类型,ttl/mipi/lvds/hdmi, 需要提前配置好屏参否则会找不到屏参报错Segmentation fault
+-c : 必填,指定输出panel类型, ttl/mipi/lvds/hdmi, 需要提前配置好屏参否则会找不到屏参报错Segmentation fault, 当画UI时屏分辨率过高(如1920x1080)需要调大cma大小, 否则会创建FB会报错
 
 eg:
-	./Drm_player --vpath 720P25.h264 -g 1 -y 1 -c ttl
+    ./Drm_player --vpath 720P25.h264 -g 1 -y 1 -c ttl
 
 
